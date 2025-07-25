@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+*.egg-info/
+.Python
+.venv/
+venv/
+env/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# FFmpeg binaries (downloaded separately for bundling)
+# These are typically large and can be downloaded when needed for PyInstaller.
+ffmpeg.exe
+ffprobe.exe
+ffmpeg # For Linux/macOS
+ffprobe # For Linux/macOS
+
+# Output files
+output_trimmed.mp4
+*.mp4 # You might want to ignore all .mp4 outputs if they are always generated
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+
+# IDE specific files (e.g., VS Code)
+.vscode/
+
+# Logs
+*.log
