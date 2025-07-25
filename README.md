@@ -1,6 +1,15 @@
 # Short a Video Trimmer + Compressor
 This is a simple desktop application built with Python's Tkinter, OpenCV, and FFmpeg for trimming and compressing video files. It provides a user-friendly graphical interface to select video segments, apply optional cropping and half-resolution scaling, and compress videos to a target file size.
 
+## Screenshots and Video
+
+<img width="839" height="974" alt="Screenshot_2" src="https://github.com/user-attachments/assets/81be9726-7f73-4092-bdd9-7bf1d1c3b22d" />
+
+
+
+https://github.com/user-attachments/assets/fcabcb19-0430-4d4d-8018-38ac4634673e
+
+
 ## Features
 Video Trimming: Select start and end times to extract a specific portion of a video.
 
