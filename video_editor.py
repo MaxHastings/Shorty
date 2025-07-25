@@ -470,9 +470,10 @@ class VideoEditorApp:
                 '-avoid_negative_ts', 'make_zero', # Handles negative timestamps if -ss seeks past start
                 '-c:v', 'libx264',
                 '-preset', 'medium', # Good balance of speed and compression. Use 'fast' for quicker results.
-                '-crf', '23', # Constant Rate Factor - often better than target bitrate for quality
-                              # Range 0-51, lower is better quality. 23 is default for libx264.
-                              # If using -crf, -b:v will be ignored unless it's a constraint (max bitrate)
+                '-b:v', f'{v_bitrate}k',
+                '-minrate', f'{v_bitrate}k',
+                '-maxrate', f'{v_bitrate}k',
+                '-bufsize', f'{v_bitrate * 2}k',
             ]
 
             video_filters = []
