@@ -5,6 +5,10 @@ This is a simple desktop application built with Python's Tkinter, OpenCV, and FF
 
 https://maxhastings.itch.io/shorty
 
+## Discord Group
+
+https://discord.gg/ydByedFbvU
+
 ## Screenshots and Video
 
 <img width="839" height="974" alt="Screenshot_2" src="https://github.com/user-attachments/assets/81be9726-7f73-4092-bdd9-7bf1d1c3b22d" />
