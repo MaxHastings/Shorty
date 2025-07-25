@@ -1,4 +1,4 @@
-# Short a Video Trimmer + Compressor
+# Shorty - A Video Trimmer + Compressor
 This is a simple desktop application built with Python's Tkinter, OpenCV, and FFmpeg for trimming and compressing video files. It provides a user-friendly graphical interface to select video segments, apply optional cropping and half-resolution scaling, and compress videos to a target file size.
 
 ## Screenshots and Video
