@@ -54,16 +54,17 @@ macOS: Install via Homebrew: brew install ffmpeg
 
 Linux: Install via your package manager (e.g., sudo apt install ffmpeg on Debian/Ubuntu).
 
+
 ## How to Run the Script
 Save the provided Python code as video_editor.py.
 
 Open your terminal or command prompt.
 
-Navigate to the directory where you saved video_editor.py.
+Navigate to the directory where you saved main.py.
 
 ### Run the script:
 
-python video_editor.py
+python main.py
 
 ## How to Build the Executable (for distribution)
 This project is designed to be bundled into a single executable using PyInstaller, making it easy to share without requiring users to install Python or FFmpeg.
@@ -74,11 +75,11 @@ pip install pyinstaller
 
 Download FFmpeg Binaries: Download the ffmpeg.exe and ffprobe.exe (if you plan to use ffprobe in the future) binaries for your operating system from ffmpeg.org.
 
-Place Binaries: Put ffmpeg.exe and ffprobe.exe in the same directory as your video_editor.py script.
+Place Binaries: Put ffmpeg.exe and ffprobe.exe in the same directory as your main.py script.
 
-Run PyInstaller: Open your terminal or command prompt in the directory containing video_editor.py and the FFmpeg binaries, then run:
+Run PyInstaller: Open your terminal or command prompt in the directory containing main.py and the FFmpeg binaries, then run:
 
-pyinstaller --onefile --windowed --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." video_editor.py
+pyinstaller --onefile --windowed --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-data "favicon.ico;." --add-data "favicon.png;." main.py
 
 --onefile: Creates a single executable file.
 
@@ -88,7 +89,7 @@ pyinstaller --onefile --windowed --add-binary "ffmpeg.exe;." --add-binary "ffpro
 
 --add-binary "ffprobe.exe;.": Same for ffprobe.exe.
 
-Find the Executable: The generated executable (video_editor.exe on Windows) will be located in the dist folder. You can now distribute this single file.
+Find the Executable: The generated executable (main.exe on Windows) will be located in the dist folder. You can now distribute this single file.
 
 ## Usage
 Browse Input File: Click "Browse" next to "Input File" to select the video you want to trim/compress.
