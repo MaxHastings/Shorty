@@ -7,24 +7,72 @@ import threading
 import tempfile
 from video_processor import VideoProcessor # Import the VideoProcessor
 
+# Import ctypes for Windows AppID setting
+import ctypes
+import sys # Import sys to check OS
+
 class VideoEditorApp:
     def __init__(self, master):
         self.master = master
-        master.title("Video Trimmer + Compressor")
+        master.title("Shorty - Video Trimmer + Compressor")
+
+        # --- Set the AppID for Windows Taskbar Icon ---
+        if sys.platform.startswith('win'): # Check if running on Windows
+            try:
+                # This should be a unique string for your application.
+                # Use your company name, product name, etc. to make it unique.
+                # Example: 'MyCompany.ShortyVideoEditor.1.0'
+                myappid = 'com.yourcompany.ShortyVideoEditor.1' # <-- CHANGE THIS TO SOMETHING UNIQUE FOR YOUR APP
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            except AttributeError:
+                # This can happen if ctypes is not available or if the OS is not Windows
+                print("Warning: Could not set AppUserModelID (not on Windows or unsupported version). Taskbar icon might be generic.")
+            except Exception as e:
+                print(f"Error setting AppUserModelID: {e}")
+        # --- End AppID setting ---
+
+        # --- Icon Loading (Place this AFTER AppID setting, but before other widgets) ---
+        try:
+            script_dir = os.path.dirname(__file__)
+
+            icon_path = os.path.join(script_dir, "favicon.ico") 
+
+            if os.path.exists(icon_path):
+                # Use iconbitmap for .ico files (best for Windows)
+                master.iconbitmap(icon_path) 
+            else:
+                print(f"Warning: Icon file not found at {icon_path}. Looked for: {icon_path}")
+                # Fallback to PNG if ICO not found (less reliable for taskbar)
+                try:
+                    png_icon_path = os.path.join(script_dir, "favicon.png")
+                    if os.path.exists(png_icon_path):
+                        icon_image = Image.open(png_icon_path)
+                        icon_photo = ImageTk.PhotoImage(icon_image)
+                        master.iconphoto(True, icon_photo) # Apply to main window and any future Toplevels
+                        print(f"Using PNG fallback icon: {png_icon_path}")
+                    else:
+                         print(f"No PNG fallback icon found at: {png_icon_path}")
+                except Exception as png_e:
+                    print(f"Error loading PNG fallback icon: {png_e}")
+
+        except tk.TclError as e:
+            print(f"Tkinter TclError loading icon: {e}. Ensure '{icon_path}' is a valid .ico file.")
+        except Exception as e:
+            print(f"An unexpected error occurred while setting the main icon: {e}")
+        # --- End of icon setting section ---
 
         # --- Model/State Variables ---
         self.input_filepath = tk.StringVar()
         self.output_filepath = tk.StringVar(value="output_trimmed.mp4")
-        # Changed from BooleanVar to StringVar for resolution choice
         self.resolution_choice = tk.StringVar(value="Full") # Default to Full Resolution
         
         # Optimization variables
         self.target_size_mb = tk.StringVar(value="10")
         self.video_crf = tk.StringVar(value="23")
-        self.use_crf = tk.BooleanVar(value=True)
+        self.use_crf = tk.BooleanVar(value=False)
         
         self.remove_audio = tk.BooleanVar(value=False)
-        self.audio_bitrate_choice = tk.StringVar(value="128k")
+        self.audio_bitrate_choice = tk.StringVar(value="96k")
         self.target_framerate = tk.StringVar(value="Original")
         self.ffmpeg_preset = tk.StringVar(value="medium")
         self.use_hevc = tk.BooleanVar(value=False)
@@ -117,7 +165,7 @@ class VideoEditorApp:
         self.audio_bitrate_menu = ttk.Combobox(options_frame, textvariable=self.audio_bitrate_choice, 
                                                 values=["64k", "96k", "128k", "192k", "256k"], state="readonly", width=8)
         self.audio_bitrate_menu.grid(row=2, column=1, sticky="w", padx=5, pady=2) 
-        self.audio_bitrate_menu.set("128k")
+        self.audio_bitrate_menu.set("96k")
 
         ttk.Label(options_frame, text="Target Frame Rate:").grid(row=3, column=0, sticky="e", padx=5, pady=2) 
         self.framerate_menu = ttk.Combobox(options_frame, textvariable=self.target_framerate, 
@@ -555,3 +603,24 @@ class VideoEditorApp:
             if self.video_cap:
                 self.video_cap.release()
             self.master.destroy()
+
+# This is crucial: Set the AppID BEFORE creating the Tkinter root window
+if sys.platform.startswith('win'):
+    try:
+        # It's good practice to set this outside the class if possible,
+        # as it should ideally be set once per process.
+        # Make sure this is unique for your application.
+        # Use your company name, product name, etc.
+        myappid = 'com.yourcompany.ShortyVideoEditor.1' # <-- CHANGE THIS TO SOMETHING UNIQUE!
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    except AttributeError:
+        # This will happen on non-Windows systems or older Windows versions
+        pass
+    except Exception as e:
+        print(f"Error setting AppUserModelID outside class: {e}")
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = VideoEditorApp(root)
+    root.mainloop()
