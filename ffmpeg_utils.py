@@ -4,8 +4,9 @@ import sys
 from tkinter import messagebox # Still needed for showing FFmpeg path error
 
 class FFmpegUtils:
-    def __init__(self):
+    def __init__(self, app_instance=None): # Added app_instance for potential future use or consistency
         self.ffmpeg_path = self._get_ffmpeg_path()
+        self.app = app_instance # Store app_instance if needed for UI updates from here
 
     def _get_ffmpeg_path(self):
         """
@@ -31,7 +32,7 @@ class FFmpegUtils:
         return ffmpeg_path
 
     def build_ffmpeg_command(self, input_filepath, output_filepath, start_time_sec, end_time_sec, 
-                             half_res_enabled, use_crf, video_crf, target_size_mb, 
+                             resolution_choice, use_crf, video_crf, target_size_mb, # Changed half_res_enabled to resolution_choice
                              remove_audio_var, audio_bitrate_choice, target_framerate, 
                              ffmpeg_preset, use_hevc, gpu_accel_choice, original_video_width, 
                              original_video_height, original_video_fps, crop_params, 
@@ -95,14 +96,22 @@ class FFmpegUtils:
         if crop_params:
             filters.append(crop_params)
 
-        if half_res_enabled:
+        # Handle resolution choice
+        target_width = original_video_width
+        target_height = original_video_height
+
+        if resolution_choice == "Half":
             target_width = original_video_width // 2
             target_height = original_video_height // 2
+        elif resolution_choice == "Quarter":
+            target_width = original_video_width // 4
+            target_height = original_video_height // 4
             
-            # Ensure even dimensions
-            target_width = (target_width // 2) * 2
-            target_height = (target_height // 2) * 2
-            
+        # Ensure even dimensions for FFmpeg compatibility
+        target_width = (target_width // 2) * 2
+        target_height = (target_height // 2) * 2
+
+        if resolution_choice != "Full": # Apply scale filter only if not full resolution
             filters.append(f"scale={target_width}:{target_height}")
 
         # Frame Rate

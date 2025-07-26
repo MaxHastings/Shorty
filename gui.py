@@ -4,7 +4,7 @@ import cv2
 from PIL import Image, ImageTk
 import os
 import threading
-import tempfile # <--- ADDED THIS IMPORT
+import tempfile
 from video_processor import VideoProcessor # Import the VideoProcessor
 
 class VideoEditorApp:
@@ -15,7 +15,8 @@ class VideoEditorApp:
         # --- Model/State Variables ---
         self.input_filepath = tk.StringVar()
         self.output_filepath = tk.StringVar(value="output_trimmed.mp4")
-        self.half_res_enabled = tk.BooleanVar(value=False)
+        # Changed from BooleanVar to StringVar for resolution choice
+        self.resolution_choice = tk.StringVar(value="Full") # Default to Full Resolution
         
         # Optimization variables
         self.target_size_mb = tk.StringVar(value="10")
@@ -102,43 +103,49 @@ class VideoEditorApp:
         options_frame = ttk.LabelFrame(self.master, text="Advanced Output Options")
         options_frame.grid(row=1, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
         options_frame.grid_columnconfigure(1, weight=1) 
+        options_frame.grid_columnconfigure(2, weight=1) # Added column for Quarter Res radio button
 
-        ttk.Checkbutton(options_frame, text="Half Resolution Output", variable=self.half_res_enabled).grid(row=0, column=0, sticky="w", padx=5, pady=2)
+        # Resolution options using Radiobuttons
+        ttk.Label(options_frame, text="Output Resolution:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
+        ttk.Radiobutton(options_frame, text="Full", variable=self.resolution_choice, value="Full").grid(row=0, column=1, sticky="w", padx=5, pady=2)
+        ttk.Radiobutton(options_frame, text="Half", variable=self.resolution_choice, value="Half").grid(row=0, column=2, sticky="w", padx=5, pady=2)
+        ttk.Radiobutton(options_frame, text="Quarter", variable=self.resolution_choice, value="Quarter").grid(row=0, column=3, sticky="w", padx=5, pady=2)
         
-        ttk.Checkbutton(options_frame, text="Remove Audio", variable=self.remove_audio, command=self._toggle_audio_options).grid(row=0, column=1, sticky="w", padx=5, pady=2)
-        ttk.Label(options_frame, text="Audio Bitrate:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
+        # Shifted rows for other options
+        ttk.Checkbutton(options_frame, text="Remove Audio", variable=self.remove_audio, command=self._toggle_audio_options).grid(row=1, column=0, sticky="w", padx=5, pady=2) 
+        ttk.Label(options_frame, text="Audio Bitrate:").grid(row=2, column=0, sticky="e", padx=5, pady=2) 
         self.audio_bitrate_menu = ttk.Combobox(options_frame, textvariable=self.audio_bitrate_choice, 
-                                               values=["64k", "96k", "128k", "192k", "256k"], state="readonly", width=8)
-        self.audio_bitrate_menu.grid(row=1, column=1, sticky="w", padx=5, pady=2)
+                                                values=["64k", "96k", "128k", "192k", "256k"], state="readonly", width=8)
+        self.audio_bitrate_menu.grid(row=2, column=1, sticky="w", padx=5, pady=2) 
         self.audio_bitrate_menu.set("128k")
 
-        ttk.Label(options_frame, text="Target Frame Rate:").grid(row=2, column=0, sticky="e", padx=5, pady=2)
+        ttk.Label(options_frame, text="Target Frame Rate:").grid(row=3, column=0, sticky="e", padx=5, pady=2) 
         self.framerate_menu = ttk.Combobox(options_frame, textvariable=self.target_framerate, 
-                                           values=["Original", "30", "24", "15"], state="readonly", width=8)
-        self.framerate_menu.grid(row=2, column=1, sticky="w", padx=5, pady=2)
+                                            values=["Original", "30", "24", "15"], state="readonly", width=8)
+        self.framerate_menu.grid(row=3, column=1, sticky="w", padx=5, pady=2) 
         self.framerate_menu.set("Original")
 
-        ttk.Label(options_frame, text="FFmpeg Preset:").grid(row=3, column=0, sticky="e", padx=5, pady=2)
+        ttk.Label(options_frame, text="FFmpeg Preset:").grid(row=4, column=0, sticky="e", padx=5, pady=2) 
         self.preset_menu = ttk.Combobox(options_frame, textvariable=self.ffmpeg_preset, 
-                                         values=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], state="readonly", width=10)
-        self.preset_menu.grid(row=3, column=1, sticky="w", padx=5, pady=2)
+                                            values=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], state="readonly", width=10)
+        self.preset_menu.grid(row=4, column=1, sticky="w", padx=5, pady=2) 
         self.preset_menu.set("medium")
 
-        ttk.Checkbutton(options_frame, text="Use H.265 (HEVC) Codec", variable=self.use_hevc, command=self._toggle_gpu_preset_options).grid(row=4, column=0, sticky="w", padx=5, pady=2)
+        ttk.Checkbutton(options_frame, text="Use H.265 (HEVC) Codec", variable=self.use_hevc, command=self._toggle_gpu_preset_options).grid(row=5, column=0, sticky="w", padx=5, pady=2) 
 
-        ttk.Label(options_frame, text="GPU Acceleration:").grid(row=5, column=0, sticky="e", padx=5, pady=2)
+        ttk.Label(options_frame, text="GPU Acceleration:").grid(row=6, column=0, sticky="e", padx=5, pady=2) 
         self.gpu_accel_menu = ttk.Combobox(options_frame, textvariable=self.gpu_accel_choice, 
-                                           values=["None", "NVIDIA (NVENC)", "AMD (AMF)", "Intel (QSV)"], 
-                                           state="readonly", width=15)
-        self.gpu_accel_menu.grid(row=5, column=1, sticky="w", padx=5, pady=2)
+                                            values=["None", "NVIDIA (NVENC)", "AMD (AMF)", "Intel (QSV)"], 
+                                            state="readonly", width=15)
+        self.gpu_accel_menu.grid(row=6, column=1, sticky="w", padx=5, pady=2) 
         self.gpu_accel_menu.set("None")
         self.gpu_accel_menu.bind("<<ComboboxSelected>>", lambda e: self._toggle_gpu_preset_options())
 
         self.canvas = tk.Canvas(self.master, width=640, height=360, bg="black", bd=2, relief="sunken")
         self.canvas.grid(row=2, column=0, columnspan=3, pady=10, padx=10, sticky="nsew")
         self.canvas.create_text(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2,
-                                  text="Load a video to see preview\nDrag on preview to select crop area",
-                                  fill="white", font=("Arial", 16))
+                                    text="Load a video to see preview\nDrag on preview to select crop area",
+                                    fill="white", font=("Arial", 16))
 
         trim_frame = ttk.LabelFrame(self.master, text="Video Trimming")
         trim_frame.grid(row=3, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
@@ -146,14 +153,14 @@ class VideoEditorApp:
 
         ttk.Label(trim_frame, text="Start Time:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
         self.start_scale = ttk.Scale(trim_frame, from_=0, to=10, orient="horizontal", length=450,
-                                      command=self._on_slider_move)
+                                            command=self._on_slider_move)
         self.start_scale.grid(row=0, column=1, padx=5, pady=2, sticky="ew")
         self.start_time_label = ttk.Label(trim_frame, text="0 sec", width=8)
         self.start_time_label.grid(row=0, column=2, sticky="w", padx=5)
 
         ttk.Label(trim_frame, text="End Time:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
         self.end_scale = ttk.Scale(trim_frame, from_=0, to=10, orient="horizontal", length=450,
-                                      command=self._on_slider_move)
+                                            command=self._on_slider_move)
         self.end_scale.grid(row=1, column=1, padx=5, pady=2, sticky="ew")
         self.end_time_label = ttk.Label(trim_frame, text="0 sec", width=8)
         self.end_time_label.grid(row=1, column=2, sticky="w", padx=5)
@@ -166,7 +173,7 @@ class VideoEditorApp:
         process_frame.grid_columnconfigure(1, weight=1)
 
         self.process_button = ttk.Button(process_frame, text="Trim & Compress Video", command=self._start_compression_thread,
-                                         style="Accent.TButton")
+                                            style="Accent.TButton")
         self.process_button.grid(row=0, column=0, pady=5, sticky="ew")
 
         self.cancel_button = ttk.Button(process_frame, text="Cancel", command=self.video_processor.cancel_compression, state=tk.DISABLED)
@@ -299,12 +306,12 @@ class VideoEditorApp:
             self.canvas_img_display_height = new_height
 
             self.canvas.create_image(self.canvas_img_offset_x, self.canvas_img_offset_y,
-                                          anchor=tk.NW, image=self.displayed_frame_on_canvas)
+                                            anchor=tk.NW, image=self.displayed_frame_on_canvas)
             self._draw_crop_rectangle()
         else:
             self.canvas.delete("all")
             self.canvas.create_text(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2,
-                                          text="Failed to load frame", fill="white", font=("Arial", 16))
+                                            text="Failed to load frame", fill="white", font=("Arial", 16))
 
     def _on_canvas_configure(self, event):
         if self.video_cap and self.video_cap.isOpened():
@@ -312,8 +319,8 @@ class VideoEditorApp:
         else:
             self.canvas.delete("all")
             self.canvas.create_text(event.width / 2, event.height / 2,
-                                          text="Load a video to see preview\nDrag on preview to select crop area",
-                                          fill="white", font=("Arial", 16))
+                                            text="Load a video to see preview\nDrag on preview to select crop area",
+                                            fill="white", font=("Arial", 16))
 
     def _on_slider_move(self, value):
         current_time_sec = float(value)
@@ -459,7 +466,7 @@ class VideoEditorApp:
         self.progress_bar.config(value=0, mode="determinate")
 
         compression_thread = threading.Thread(target=self._compress_video_task, 
-                                             args=(input_file, output_file, start_time, end_time))
+                                                args=(input_file, output_file, start_time, end_time))
         compression_thread.daemon = True
         compression_thread.start()
 
@@ -477,11 +484,11 @@ class VideoEditorApp:
                 output_file, 
                 start_time_sec, 
                 end_time_sec, 
-                self.half_res_enabled.get(), 
+                self.resolution_choice.get(), # Pass the selected resolution string
                 self.use_crf.get(), 
                 self.video_crf.get(), 
                 self.target_size_mb.get(), 
-                self.remove_audio, # <--- CHANGED THIS LINE: Pass the BooleanVar object directly
+                self.remove_audio,
                 self.audio_bitrate_choice.get(), 
                 self.target_framerate.get(), 
                 self.ffmpeg_preset.get(), 

@@ -16,7 +16,7 @@ class VideoProcessor:
         self.app = app_instance
         
         # Instantiate the helper classes
-        self.ffmpeg_utils = FFmpegUtils()
+        self.ffmpeg_utils = FFmpegUtils(app_instance) # Pass app_instance to ffmpeg_utils
         self.bitrate_calculator = BitrateCalculator()
         self.ffmpeg_executor = FFmpegExecutor(app_instance) # Pass app_instance to executor
 
@@ -25,7 +25,7 @@ class VideoProcessor:
         self.current_pass = self.ffmpeg_executor.current_pass # Will be updated by executor
 
     def build_ffmpeg_command(self, input_filepath, output_filepath, start_time_sec, end_time_sec, 
-                             half_res_enabled, use_crf, video_crf, target_size_mb, 
+                             resolution_choice, use_crf, video_crf, target_size_mb, # Changed half_res_enabled to resolution_choice
                              remove_audio_var, audio_bitrate_choice, target_framerate, 
                              ffmpeg_preset, use_hevc, gpu_accel_choice, original_video_width, 
                              original_video_height, original_video_fps, crop_params, pass_number=1, total_passes=1):
@@ -46,7 +46,7 @@ class VideoProcessor:
         
         return self.ffmpeg_utils.build_ffmpeg_command(
             input_filepath, output_filepath, start_time_sec, end_time_sec, 
-            half_res_enabled, use_crf, video_crf, target_size_mb, 
+            resolution_choice, use_crf, video_crf, target_size_mb, # Pass resolution_choice
             remove_audio_var, audio_bitrate_choice, target_framerate, 
             ffmpeg_preset, use_hevc, gpu_accel_choice, original_video_width, 
             original_video_height, original_video_fps, crop_params, 
