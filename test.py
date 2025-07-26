@@ -1,11 +1,9 @@
 import sys
 import threading
 from pynput import keyboard
-from PyQt5.QtWidgets import QApplication, QWidget
+from PyQt5.QtWidgets import QApplication, QWidget, QPushButton
 from PyQt5.QtCore import Qt, QRect, QTimer, QPoint
-from PyQt5.QtGui import QRegion
-from PyQt5.QtGui import QPainter, QPen, QColor
-
+from PyQt5.QtGui import QRegion, QPainter, QPen, QColor
 
 should_show_overlay = False
 overlay_instance = None
@@ -23,6 +21,25 @@ class DimOverlay(QWidget):
         self.end = None
         self.box_drawn = False
 
+        self.record_button = QPushButton("Start Recording", self)
+        self.record_button.hide()
+        self.record_button.setStyleSheet("""
+            QPushButton {
+                background-color: white;
+                color: black;
+                border: 2px solid red;
+                padding: 5px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: red;
+                color: white;
+            }
+        """)
+        self.record_button.clicked.connect(self.toggle_record)
+
+        self.recording = False
+
     def mousePressEvent(self, event):
         if not self.box_drawn:
             self.start = event.pos()
@@ -38,6 +55,7 @@ class DimOverlay(QWidget):
             self.box_drawn = True
             self.update()
             self.apply_hole_mask()
+            self.show_record_button()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
@@ -70,6 +88,22 @@ class DimOverlay(QWidget):
         clear_rect = QRect(self.start, self.end).normalized()
         hole_region = QRegion(clear_rect)
         self.setMask(full_region.subtracted(hole_region))
+
+    def show_record_button(self):
+        """Place record button to the right of the box."""
+        rect = QRect(self.start, self.end).normalized()
+        button_x = rect.right() + 10
+        button_y = rect.top()
+        self.record_button.move(button_x, button_y)
+        self.record_button.show()
+
+    def toggle_record(self):
+        """Toggle button text for recording."""
+        self.recording = not self.recording
+        if self.recording:
+            self.record_button.setText("Stop Recording")
+        else:
+            self.record_button.setText("Start Recording")
 
 
 def on_hotkey(key):
