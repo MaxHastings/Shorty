@@ -11,12 +11,7 @@ https://discord.gg/ydByedFbvU
 
 ## Screenshots and Video
 
-<img width="839" height="974" alt="Screenshot_2" src="https://github.com/user-attachments/assets/81be9726-7f73-4092-bdd9-7bf1d1c3b22d" />
-
-
-
-https://github.com/user-attachments/assets/fcabcb19-0430-4d4d-8018-38ac4634673e
-
+https://github.com/user-attachments/assets/a14836a5-bae3-40d3-8a0d-17e352ae43da
 
 ## Features
 Video Trimming: Select start and end times to extract a specific portion of a video.
