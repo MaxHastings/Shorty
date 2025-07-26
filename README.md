@@ -1,7 +1,19 @@
-Video Trimmer + Compressor
+# Shorty - A Video Trimmer + Compressor
 This is a simple desktop application built with Python's Tkinter, OpenCV, and FFmpeg for trimming and compressing video files. It provides a user-friendly graphical interface to select video segments, apply optional cropping and half-resolution scaling, and compress videos to a target file size.
 
-Features
+## Download EXE on Itch.io easier
+
+https://maxhastings.itch.io/shorty
+
+## Discord Group
+
+https://discord.gg/ydByedFbvU
+
+## Screenshots and Video
+
+https://github.com/user-attachments/assets/a14836a5-bae3-40d3-8a0d-17e352ae43da
+
+## Features
 Video Trimming: Select start and end times to extract a specific portion of a video.
 
 Video Compression: Compress videos to a desired target size in MB, automatically calculating the appropriate bitrate.
@@ -14,7 +26,7 @@ Half Resolution Option: Reduce video resolution by half for further compression.
 
 Self-Contained Executable: Can be bundled into a single executable file using PyInstaller, eliminating the need for users to manually install FFmpeg.
 
-Requirements
+## Requirements
 To run the script directly, you need:
 
 Python 3.x
@@ -42,18 +54,19 @@ macOS: Install via Homebrew: brew install ffmpeg
 
 Linux: Install via your package manager (e.g., sudo apt install ffmpeg on Debian/Ubuntu).
 
-How to Run the Script
-Save the provided Python code as main.py.
+
+## How to Run the Script
+Save the provided Python code as video_editor.py.
 
 Open your terminal or command prompt.
 
 Navigate to the directory where you saved main.py.
 
-Run the script:
+### Run the script:
 
 python main.py
 
-How to Build the Executable (for distribution)
+## How to Build the Executable (for distribution)
 This project is designed to be bundled into a single executable using PyInstaller, making it easy to share without requiring users to install Python or FFmpeg.
 
 Install PyInstaller:
@@ -78,7 +91,7 @@ pyinstaller --onefile --windowed --add-binary "ffmpeg.exe;." --add-binary "ffpro
 
 Find the Executable: The generated executable (main.exe on Windows) will be located in the dist folder. You can now distribute this single file.
 
-Usage
+## Usage
 Browse Input File: Click "Browse" next to "Input File" to select the video you want to trim/compress.
 
 Set Target Size: Enter the desired output file size in megabytes (MB) in the "Target Size (MB)" field.
@@ -97,7 +110,7 @@ Half Resolution (Optional): Check the "Half Res" checkbox to reduce the video's 
 
 Trim & Compress: Click the "Trim & Compress" button to start the processing. A message box will inform you when it begins and when it's finished (or if an error occurred).
 
-Troubleshooting
+## Troubleshooting
 "FFmpeg not found" error when running the script directly: Ensure FFmpeg is installed and its bin directory is correctly added to your system's PATH environment variable.
 
 "FFmpeg not found" error when running the bundled executable: This should be resolved by the --add-binary flags in the PyInstaller command and the get_ffmpeg_path() function in the script. Double-check that ffmpeg.exe was in the same directory as your script when you ran PyInstaller.
