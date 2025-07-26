@@ -8,6 +8,7 @@ import sys
 import threading
 import re # For parsing FFmpeg progress output
 import time # For simulating progress in parsing
+import tempfile # For temporary log file
 
 # Helper function (can be outside class as it's general purpose)
 def get_ffmpeg_path():
@@ -79,6 +80,7 @@ class VideoEditorApp:
 
         # FFmpeg process handle for potential cancellation
         self.ffmpeg_process = None
+        self.current_pass = 0 # 0: idle, 1: pass1, 2: pass2
 
         # --- GUI Setup ---
         self._create_widgets()
@@ -171,8 +173,8 @@ class VideoEditorApp:
         self.canvas = tk.Canvas(self.master, width=640, height=360, bg="black", bd=2, relief="sunken")
         self.canvas.grid(row=2, column=0, columnspan=3, pady=10, padx=10, sticky="nsew") # Adjusted row
         self.canvas.create_text(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2,
-                                  text="Load a video to see preview\nDrag on preview to select crop area",
-                                  fill="white", font=("Arial", 16))
+                                     text="Load a video to see preview\nDrag on preview to select crop area",
+                                     fill="white", font=("Arial", 16))
 
         # Trimming Controls Frame
         trim_frame = ttk.LabelFrame(self.master, text="Video Trimming")
@@ -181,14 +183,14 @@ class VideoEditorApp:
 
         ttk.Label(trim_frame, text="Start Time:").grid(row=0, column=0, sticky="e", padx=5, pady=2)
         self.start_scale = ttk.Scale(trim_frame, from_=0, to=10, orient="horizontal", length=450,
-                                      command=self._on_slider_move)
+                                         command=self._on_slider_move)
         self.start_scale.grid(row=0, column=1, padx=5, pady=2, sticky="ew")
         self.start_time_label = ttk.Label(trim_frame, text="0 sec", width=8)
         self.start_time_label.grid(row=0, column=2, sticky="w", padx=5)
 
         ttk.Label(trim_frame, text="End Time:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
         self.end_scale = ttk.Scale(trim_frame, from_=0, to=10, orient="horizontal", length=450,
-                                      command=self._on_slider_move)
+                                         command=self._on_slider_move)
         self.end_scale.grid(row=1, column=1, padx=5, pady=2, sticky="ew")
         self.end_time_label = ttk.Label(trim_frame, text="0 sec", width=8)
         self.end_time_label.grid(row=1, column=2, sticky="w", padx=5)
@@ -235,7 +237,7 @@ class VideoEditorApp:
         else:
             self.entry_crf.config(state="disabled")
             self.entry_size.config(state="normal")
-            self.status_label.config(text="Using Target Size: FFmpeg will attempt to hit this size.")
+            self.status_label.config(text="Using Target Size: FFmpeg will use two-pass encoding for accuracy.")
 
     def _toggle_gpu_preset_options(self):
         """
@@ -504,34 +506,40 @@ class VideoEditorApp:
             except ValueError:
                 audio_bitrate_kbps = 128 # Fallback if parsing fails
 
-        # Calculate available video kbits
+        # Account for potential overhead (container, metadata) by reducing target by a small percentage
+        # A 5-10% reduction is common. Let's use 8% as a starting point.
+        overhead_factor = 0.08
+        target_kbits_for_streams = total_kbits * (1 - overhead_factor)
+
         min_audio_kbits_needed = audio_bitrate_kbps * duration_sec
-        # If target_kbits is too small, adjust audio bitrate or ensure positive video bitrate
-        if total_kbits <= min_audio_kbits_needed:
-            if total_kbits > 0 and duration_sec > 0:
+        
+        # If the remaining target for streams is too small, adjust audio bitrate or ensure positive video bitrate
+        if target_kbits_for_streams <= min_audio_kbits_needed:
+            if target_kbits_for_streams > 0 and duration_sec > 0:
                 # Try to allocate 70% to video, 30% to audio if target is tight
-                target_video_kbits = total_kbits * 0.7 
-                target_audio_kbits = total_kbits * 0.3
+                target_video_kbits = target_kbits_for_streams * 0.7 
+                target_audio_kbits = target_kbits_for_streams * 0.3
                 
                 audio_bitrate_kbps = int(target_audio_kbits / duration_sec)
-                # Ensure a reasonable minimum for audio
-                if audio_bitrate_kbps < 64 and not self.remove_audio.get(): audio_bitrate_kbps = 64
+                # Ensure a reasonable minimum for audio (e.g., 32kbps if target is very small)
+                if audio_bitrate_kbps < 32 and not self.remove_audio.get(): audio_bitrate_kbps = 32
                 
-                video_kbits_per_sec = (total_kbits - (audio_bitrate_kbps * duration_sec)) / duration_sec
-                video_bitrate_kbps = max(100, int(video_kbits_per_sec)) # Minimum 100 kbps for video
+                video_kbits_per_sec = (target_kbits_for_streams - (audio_bitrate_kbps * duration_sec)) / duration_sec
+                video_bitrate_kbps = max(50, int(video_kbits_per_sec)) # Minimum 50 kbps for video
             else: # Very small/zero target size or duration
-                video_bitrate_kbps = 100 # Minimal video bitrate
-                audio_bitrate_kbps = 64 # Minimal audio bitrate
+                video_bitrate_kbps = 50 # Minimal video bitrate
+                audio_bitrate_kbps = 32 # Minimal audio bitrate
         else:
-            video_kbits_per_sec = (total_kbits - (audio_bitrate_kbps * duration_sec)) / duration_sec
-            video_bitrate_kbps = max(100, int(video_kbits_per_sec)) # Minimum 100 kbps for video
+            video_kbits_per_sec = (target_kbits_for_streams - (audio_bitrate_kbps * duration_sec)) / duration_sec
+            video_bitrate_kbps = max(50, int(video_kbits_per_sec)) # Minimum 50 kbps for video
         
+        print(f"Calculated Video Bitrate: {video_bitrate_kbps} kbps, Audio Bitrate: {audio_bitrate_kbps} kbps")
         return video_bitrate_kbps, audio_bitrate_kbps
 
     def _start_compression_thread(self):
         self.process_button.config(state=tk.DISABLED)
         self.cancel_button.config(state=tk.NORMAL)
-        self.status_label.config(text="Processing video... Please wait.")
+        self.status_label.config(text="Initializing compression...")
         self.progress_bar.config(value=0, mode="determinate") # Reset progress bar
 
         compression_thread = threading.Thread(target=self._compress_video_task)
@@ -545,8 +553,70 @@ class VideoEditorApp:
             self.master.after(0, lambda: self.progress_bar.config(value=0))
             self.master.after(0, lambda: self.process_button.config(state=tk.NORMAL))
             self.master.after(0, lambda: self.cancel_button.config(state=tk.DISABLED))
+            self.current_pass = 0 # Reset pass state
+
+    def _execute_ffmpeg_command(self, command, duration_in_seconds, pass_number, total_passes, log_file_path=None):
+        """
+        Executes an FFmpeg command and updates progress.
+        Returns True on success, False on failure or cancellation.
+        """
+        self.current_pass = pass_number
+        pass_prefix = f"Pass {pass_number}/{total_passes}: "
+        self.master.after(0, lambda: self.status_label.config(text=f"{pass_prefix}Starting FFmpeg..."))
+
+        print(f"FFmpeg Command ({pass_prefix.strip()}):", " ".join(command))
+        
+        # Use a pipe for stderr to capture progress
+        self.ffmpeg_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        
+        # --- Progress Parsing (stderr) ---
+        time_re = re.compile(r"time=(\d{2}):(\d{2}):(\d{2})\.\d+")
+        
+        start_progress_offset = (pass_number - 1) * (100 / total_passes)
+        progress_scale_factor = (100 / total_passes) / duration_in_seconds if duration_in_seconds > 0 else 0
+
+        for line in self.ffmpeg_process.stderr:
+            # Check for cancellation
+            if self.ffmpeg_process.poll() is not None: # Process has terminated
+                if self.ffmpeg_process.returncode != 0:
+                    # If the process terminated prematurely (e.g., due to cancellation or error)
+                    if "Compression cancelled" not in self.status_label.cget("text"):
+                        # Only show error if not user cancelled
+                        print(f"FFmpeg ({pass_prefix.strip()}) process ended unexpectedly with code {self.ffmpeg_process.returncode}. Stderr: {line.strip()}")
+                        self.master.after(0, lambda: self.status_label.config(text=f"{pass_prefix}Error: FFmpeg process failed."))
+                    return False # Indicate failure or cancellation
+                else: # Process completed successfully (e.g., pass 1 null output)
+                    break # Exit loop, move to next step
+
+            match = time_re.search(line)
+            if match:
+                hours = int(match.group(1))
+                minutes = int(match.group(2))
+                seconds = int(match.group(3))
+                current_time = hours * 3600 + minutes * 60 + seconds
+
+                if duration_in_seconds > 0:
+                    current_pass_progress = (current_time * progress_scale_factor)
+                    total_progress_percentage = start_progress_offset + current_pass_progress
+                    total_progress_percentage = min(total_progress_percentage, start_progress_offset + (100 / total_passes) - 1) # Cap
+                    
+                    self.master.after(0, lambda p=total_progress_percentage: self.progress_bar.config(value=p))
+                    self.master.after(0, lambda ct=current_time: self.status_label.config(text=f"{pass_prefix}Processing: {ct} / {int(duration_in_seconds)} seconds"))
+            
+            # Small delay to prevent UI freeze and excessive CPU usage from parsing
+            time.sleep(0.005) # Slightly reduced delay
+
+        # Wait for the process to finish and get the return code
+        self.ffmpeg_process.wait()
+        
+        if self.ffmpeg_process.returncode != 0:
+            stderr_output = self.ffmpeg_process.stderr.read() # Read any remaining stderr output
+            print(f"FFmpeg ({pass_prefix.strip()}) Error Output:\n{stderr_output}")
+            return False # Indicate failure
+        return True # Indicate success
 
     def _compress_video_task(self):
+        log_file_path = None
         try:
             input_file = self.input_filepath.get()
             start_sec = int(self.start_scale.get())
@@ -581,27 +651,31 @@ class VideoEditorApp:
             ffmpeg_path = get_ffmpeg_path()
             if ffmpeg_path is None:
                 raise FileNotFoundError("FFmpeg executable not found. Please ensure it's in the same directory as the script/exe or in your system's PATH.")
-
-            # Initialize command with base options
-            command = [ffmpeg_path, "-y"]
-
-            # --- Hardware Acceleration (Decoder - placed BEFORE input file) ---
-            # These options tell FFmpeg to use hardware for decoding the input video
-            if gpu_accelerator == "NVIDIA (NVENC)":
-                command.extend(["-hwaccel", "cuda"]) 
-            elif gpu_accelerator == "AMD (AMF)":
-                command.extend(["-hwaccel", "dxva2"]) # Or 'd3d11va' for D3D11VA
-            elif gpu_accelerator == "Intel (QSV)":
-                command.extend(["-hwaccel", "qsv", "-qsv_decode", "true"])
             
-            # Input file and trimming
-            command.extend(["-ss", str(start_sec), "-to", str(end_sec), "-i", input_file])
+            # Generate a temporary log file name
+            temp_dir = tempfile.gettempdir()
+            log_file_base = os.path.join(temp_dir, "ffmpeg2pass")
+            log_file_path = f"{log_file_base}-0.log" # FFmpeg adds -0.log, -1.log etc.
+
+            # Common FFmpeg arguments for both passes
+            common_args = ["-ss", str(start_sec), "-to", str(end_sec), "-i", input_file]
+            
+            # --- Hardware Acceleration (Decoder - placed BEFORE input file in common_args) ---
+            hwaccel_decoder_args = []
+            if gpu_accelerator == "NVIDIA (NVENC)":
+                hwaccel_decoder_args.extend(["-hwaccel", "cuda"]) 
+            elif gpu_accelerator == "AMD (AMF)":
+                hwaccel_decoder_args.extend(["-hwaccel", "dxva2"]) # Or 'd3d11va' for D3d11VA
+            elif gpu_accelerator == "Intel (QSV)":
+                hwaccel_decoder_args.extend(["-hwaccel", "qsv", "-qsv_decode", "true"])
+            
+            # Insert hwaccel args right after ffmpeg_path
+            command_base = [ffmpeg_path, "-y"] + hwaccel_decoder_args + common_args
 
             # --- Video Codec and Encoder Options ---
             video_codec_params = []
             video_filters = []
             
-            # Determine the video encoder based on GPU acceleration and HEVC choice
             video_codec = "libx264" # Default CPU encoder (H.264)
             if gpu_accelerator == "NVIDIA (NVENC)":
                 video_codec = "hevc_nvenc" if use_hevc else "h264_nvenc"
@@ -613,11 +687,95 @@ class VideoEditorApp:
                 video_codec = "hevc_qsv" if use_hevc else "h264_qsv"
                 video_codec_params.extend(["-preset", ffmpeg_preset]) # QSV also uses presets
 
-            command.extend(["-c:v", video_codec])
-            command.extend(video_codec_params) # Add specific encoder parameters
+            # --- Video Filters (Resolution, Frame Rate, Cropping) ---
+            if half_res_enabled:
+                new_width = self.original_video_width // 2
+                new_height = self.original_video_height // 2
+                new_width = (new_width // 2) * 2 # Ensure dimensions are even
+                new_height = (new_height // 2) * 2
+                video_filters.append(f"scale={new_width}:{new_height}")
 
-            # Bitrate or CRF
-            if use_crf:
+            if target_framerate != "Original" and self.original_video_fps > 0:
+                try:
+                    original_fps_int = int(self.original_video_fps)
+                    target_fps_int = int(target_framerate)
+                    if target_fps_int < original_fps_int: # Only apply if target is lower
+                        video_filters.append(f"fps={target_fps_int}")
+                except ValueError:
+                    pass
+
+            crop_params = self._get_ffmpeg_crop_params()
+            if crop_params:
+                video_filters.append(crop_params)
+
+            filter_complex_cmd = []
+            if video_filters:
+                filter_complex_cmd.extend(["-vf", ",".join(video_filters)])
+
+            # --- Pass 1 Command (Target Size only) ---
+            if not use_crf:
+                try:
+                    target_size_mb_val = float(target_size_mb)
+                    if target_size_mb_val <= 0:
+                        raise ValueError("Target size must be a positive number.")
+                    
+                    video_bitrate_kbps, audio_bitrate_kbps = self._calculate_bitrate(
+                        target_size_mb_val, total_duration_to_process, audio_bitrate_str
+                    )
+
+                    # Pass 1 command construction
+                    command_pass1 = command_base + [
+                        "-c:v", video_codec,
+                    ] + video_codec_params + [
+                        "-b:v", f"{video_bitrate_kbps}k",
+                        "-pass", "1",
+                        "-an", # No audio in pass 1
+                        "-f", "null", # Output to null
+                        "-passlogfile", log_file_base,
+                    ] + filter_complex_cmd + [
+                        os.devnull # Actual output file is null
+                    ]
+
+                    # Execute Pass 1
+                    if not self._execute_ffmpeg_command(command_pass1, total_duration_to_process, 1, 2):
+                        raise Exception("FFmpeg Pass 1 failed or was cancelled.")
+
+                    self.master.after(0, lambda: self.status_label.config(text="Pass 1 complete. Starting Pass 2..."))
+                    self.master.after(0, lambda: self.progress_bar.config(value=50)) # Set progress to 50% after Pass 1
+
+                    # --- Pass 2 Command ---
+                    command_pass2 = command_base + [
+                        "-c:v", video_codec,
+                    ] + video_codec_params + [
+                        "-b:v", f"{video_bitrate_kbps}k",
+                        "-pass", "2",
+                        "-passlogfile", log_file_base,
+                    ] 
+                    
+                    # Audio options for Pass 2
+                    if remove_audio:
+                        command_pass2.extend(["-an"])
+                    else:
+                        command_pass2.extend(["-c:a", "aac", "-b:a", audio_bitrate_str])
+
+                    command_pass2.extend(filter_complex_cmd)
+                    command_pass2.extend(["-movflags", "+faststart", output_file])
+
+                    # Execute Pass 2
+                    if not self._execute_ffmpeg_command(command_pass2, total_duration_to_process, 2, 2):
+                        raise Exception("FFmpeg Pass 2 failed or was cancelled.")
+
+                    self.master.after(0, lambda: self.progress_bar.config(value=100))
+                    self.master.after(0, lambda: self.status_label.config(text="Video trimmed and compressed successfully!"))
+                    messagebox.showinfo("Success", "Video trimmed and compressed successfully!")
+
+                except ValueError as e:
+                    raise ValueError(f"Invalid target size: {e}. Please enter a valid number.")
+            else: # CRF mode (single pass)
+                command = command_base + [
+                    "-c:v", video_codec,
+                ] + video_codec_params
+                
                 try:
                     crf_val = int(crf_value)
                     if not (0 <= crf_val <= 51):
@@ -625,144 +783,73 @@ class VideoEditorApp:
                     command.extend(["-crf", str(crf_val)])
                 except ValueError:
                     raise ValueError("Invalid CRF value. Please enter an integer.")
-            else:
-                try:
-                    size_mb = float(target_size_mb)
-                    if size_mb <= 0:
-                        raise ValueError("Target size must be a positive number.")
-                    
-                    video_bitrate_kbps, audio_bitrate_kbps = self._calculate_bitrate(size_mb, total_duration_to_process, audio_bitrate_str)
-                    command.extend(["-b:v", f"{video_bitrate_kbps}k"])
-                    if not remove_audio:
-                        command.extend(["-b:a", f"{audio_bitrate_kbps}k"])
-                except ValueError:
-                    raise ValueError("Invalid target size. Please enter a number.")
 
-            # CPU Encoder Preset (only if no GPU acceleration)
-            if gpu_accelerator == "None":
-                command.extend(["-preset", ffmpeg_preset])
-
-            # --- Audio Options ---
-            if remove_audio:
-                command.extend(["-an"]) # No audio
-            else:
-                command.extend(["-c:a", "aac", "-b:a", audio_bitrate_str])
-
-            # --- Video Filters (Scaling, Cropping, Frame Rate) ---
-            
-            # Scaling
-            scale_filter = ""
-            if half_res_enabled:
-                if self.original_video_width > 0 and self.original_video_height > 0:
-                    new_width = (self.original_video_width // 2 // 2) * 2 # Ensure even dimensions
-                    new_height = (self.original_video_height // 2 // 2) * 2
-                    scale_filter = f"scale={new_width}:{new_height}"
-                    print(f"Applying half-resolution scale: {new_width}x{new_height}")
+                # Audio options for CRF mode
+                if remove_audio:
+                    command.extend(["-an"]) # No audio
                 else:
-                    self.master.after(0, lambda: messagebox.showwarning("Warning", "Original video dimensions not available for half resolution. Skipping scaling."))
-
-            # Cropping
-            crop_params = self._get_ffmpeg_crop_params()
-            if crop_params:
-                video_filters.append(crop_params)
-
-            if scale_filter:
-                video_filters.append(scale_filter)
-
-            # Frame Rate
-            if target_framerate != "Original":
-                try:
-                    target_fps = int(target_framerate)
-                    if target_fps > 0:
-                        video_filters.append(f"fps={target_fps}")
-                    else:
-                        raise ValueError
-                except ValueError:
-                    self.master.after(0, lambda: messagebox.showwarning("Warning", "Invalid target frame rate. Using original."))
-
-            if video_filters:
-                command.extend(["-vf", ",".join(video_filters)])
-
-            # Output file
-            command.append(output_file)
-
-            print("FFmpeg Command:", " ".join(command))
-
-            self.ffmpeg_process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, # Capture both stdout and stderr
-                universal_newlines=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-            )
-
-            # --- Progress Parsing ---
-            duration_regex = re.compile(r"Duration: (\d{2}):(\d{2}):(\d{2})\.\d{2}")
-            time_regex = re.compile(r"time=(\d{2}):(\d{2}):(\d{2})\.\d{2}")
-            full_duration_sec = total_duration_to_process # Use trimmed duration for progress
-
-            # Initial duration discovery (if not already known from OpenCV)
-            # FFmpeg will print the full duration of the *input* file early on.
-            # We are using the trimmed duration, but it's good to keep this in mind.
-            
-            # Read FFmpeg output line by line for progress
-            for line in self.ffmpeg_process.stdout:
-                print(line.strip()) # For debugging: print FFmpeg output to console
+                    command.extend(["-c:a", "aac", "-b:a", audio_bitrate_str])
                 
-                # Check for cancellation request
-                if self.ffmpeg_process.poll() is not None and self.ffmpeg_process.returncode != 0:
-                    if self.ffmpeg_process.returncode != -15: # -15 is common for SIGTERM (cancel)
-                        self.master.after(0, lambda: messagebox.showerror("Error", f"FFmpeg Error: {line.strip()}"))
-                    break # Exit loop if cancelled or error
+                command.extend(filter_complex_cmd)
+                command.extend(["-movflags", "+faststart", output_file])
 
-                match = time_regex.search(line)
-                if match:
-                    hours, minutes, seconds = map(int, match.groups())
-                    current_time_processed = hours * 3600 + minutes * 60 + seconds
-                    
-                    if full_duration_sec > 0:
-                        progress = (current_time_processed / full_duration_sec) * 100
-                        # Clamp progress to 100%
-                        progress = min(progress, 100) 
-                        self.master.after(0, lambda p=progress: self.progress_bar.config(value=p))
-                        self.master.after(0, lambda t=current_time_processed, d=full_duration_sec: self.status_label.config(text=f"Processing: {t} / {d} seconds ({p:.1f}%)"))
-                
-                # Small delay to prevent Tkinter from freezing and to avoid aggressive parsing
-                time.sleep(0.01)
+                # Execute single pass for CRF
+                if not self._execute_ffmpeg_command(command, total_duration_to_process, 1, 1):
+                    raise Exception("FFmpeg process failed or was cancelled.")
 
-            self.ffmpeg_process.wait() # Wait for the process to truly finish
-
-            if self.ffmpeg_process.returncode == 0:
                 self.master.after(0, lambda: self.progress_bar.config(value=100))
-                self.master.after(0, lambda: self.status_label.config(text=f"Video successfully processed and saved to {output_file}"))
-                self.master.after(0, lambda: messagebox.showinfo("Success", f"Video successfully processed and saved to {output_file}"))
-            else:
-                stderr_output = self.ffmpeg_process.communicate()[0] # Get any remaining output
-                error_msg = f"FFmpeg process failed with error code {self.ffmpeg_process.returncode}. Output: {stderr_output}"
-                self.master.after(0, lambda: messagebox.showerror("Error", error_msg))
-                self.master.after(0, lambda: self.status_label.config(text="Processing failed! Check console for errors."))
+                self.master.after(0, lambda: self.status_label.config(text="Video trimmed and compressed successfully!"))
+                messagebox.showinfo("Success", "Video trimmed and compressed successfully!")
+
 
         except ValueError as e:
-            self.master.after(0, lambda: messagebox.showerror("Input Error", str(e)))
-            self.master.after(0, lambda: self.status_label.config(text=f"Error: {e}"))
+            self.master.after(0, lambda: self.status_label.config(text=f"Input Error: {e}"))
+            messagebox.showerror("Input Error", str(e))
         except FileNotFoundError as e:
-            self.master.after(0, lambda: messagebox.showerror("File Error", str(e)))
-            self.master.after(0, lambda: self.status_label.config(text=f"Error: {e}"))
+            self.master.after(0, lambda: self.status_label.config(text=f"FFmpeg Error: {e}"))
+            messagebox.showerror("FFmpeg Not Found", str(e))
         except Exception as e:
-            self.master.after(0, lambda: messagebox.showerror("An unexpected error occurred", str(e)))
             self.master.after(0, lambda: self.status_label.config(text=f"An unexpected error occurred: {e}"))
+            messagebox.showerror("Error", f"An unexpected error occurred: {e}")
         finally:
             self.master.after(0, lambda: self.process_button.config(state=tk.NORMAL))
             self.master.after(0, lambda: self.cancel_button.config(state=tk.DISABLED))
+            self.current_pass = 0 # Reset pass state
+            if self.ffmpeg_process:
+                self.ffmpeg_process.stdout.close()
+                self.ffmpeg_process.stderr.close()
+                self.ffmpeg_process = None # Clear process handle
+            
+            # Clean up temporary log files
+            if log_file_path and os.path.exists(log_file_path):
+                try:
+                    os.remove(log_file_path)
+                    # FFmpeg might also create .mbtree or other temporary files
+                    # A more robust cleanup might iterate and delete files starting with the log_file_base
+                    # E.g., for f in os.listdir(temp_dir): if f.startswith("ffmpeg2pass"): os.remove(os.path.join(temp_dir, f))
+                    for ext in [".log", ".log.mbtree"]: # Common FFmpeg log extensions
+                        if os.path.exists(log_file_base + ext):
+                            os.remove(log_file_base + ext)
+                except Exception as e:
+                    print(f"Warning: Could not delete temporary FFmpeg log files: {e}")
+
 
     def _on_closing(self):
-        if self.video_cap is not None:
-            self.video_cap.release()
         if self.ffmpeg_process and self.ffmpeg_process.poll() is None:
-            self.ffmpeg_process.terminate() # Ensure FFmpeg process is terminated
-        self.master.destroy()
+            if messagebox.askyesno("Quit", "FFmpeg is still running. Do you want to cancel and quit?"):
+                self.ffmpeg_process.terminate()
+                self.master.destroy()
+            else:
+                pass # Do nothing, user wants to keep app open
+        else:
+            if self.video_cap:
+                self.video_cap.release()
+            self.master.destroy()
 
-if __name__ == "__main__":
+def main():
     root = tk.Tk()
     app = VideoEditorApp(root)
     root.mainloop()
+
+if __name__ == "__main__":
+    main()
