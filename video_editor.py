@@ -7,6 +7,7 @@ from PIL import Image, ImageTk
 import sys
 import threading
 import re # For parsing FFmpeg progress output
+import time # For simulating progress in parsing
 
 # Helper function (can be outside class as it's general purpose)
 def get_ffmpeg_path():
@@ -24,6 +25,7 @@ def get_ffmpeg_path():
     
     if not os.path.exists(ffmpeg_path):
         try:
+            # Try to run from PATH if not found next to the script/exe
             subprocess.run([ffmpeg_exe_name, "-version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             return ffmpeg_exe_name
         except (subprocess.CalledProcessError, FileNotFoundError):
@@ -49,8 +51,9 @@ class VideoEditorApp:
         self.remove_audio = tk.BooleanVar(value=False)
         self.audio_bitrate_choice = tk.StringVar(value="128k") # Default audio bitrate
         self.target_framerate = tk.StringVar(value="Original") # Default framerate
-        self.ffmpeg_preset = tk.StringVar(value="medium") # Default preset
+        self.ffmpeg_preset = tk.StringVar(value="medium") # Default preset for CPU encoders
         self.use_hevc = tk.BooleanVar(value=False) # Use H.265 (HEVC) instead of H.264
+        self.gpu_accel_choice = tk.StringVar(value="None") # New: For GPU acceleration
 
         # Video capture object
         self.video_cap = None
@@ -88,6 +91,7 @@ class VideoEditorApp:
         self._update_slider_labels()
         self._toggle_bitrate_crf_options() # Set initial state for size/CRF
         self._toggle_audio_options() # Set initial state for audio bitrate
+        self._toggle_gpu_preset_options() # Initial state for GPU/Preset
 
     def _create_widgets(self):
         # Configure grid weights for main window for resizing
@@ -147,18 +151,28 @@ class VideoEditorApp:
 
         ttk.Label(options_frame, text="FFmpeg Preset:").grid(row=3, column=0, sticky="e", padx=5, pady=2)
         self.preset_menu = ttk.Combobox(options_frame, textvariable=self.ffmpeg_preset, 
-                                        values=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], state="readonly", width=10)
+                                         values=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], state="readonly", width=10)
         self.preset_menu.grid(row=3, column=1, sticky="w", padx=5, pady=2)
         self.preset_menu.set("medium")
 
-        ttk.Checkbutton(options_frame, text="Use H.265 (HEVC) Codec", variable=self.use_hevc).grid(row=4, column=0, sticky="w", padx=5, pady=2)
+        ttk.Checkbutton(options_frame, text="Use H.265 (HEVC) Codec", variable=self.use_hevc, command=self._toggle_gpu_preset_options).grid(row=4, column=0, sticky="w", padx=5, pady=2)
+
+        # New: GPU Acceleration option
+        ttk.Label(options_frame, text="GPU Acceleration:").grid(row=5, column=0, sticky="e", padx=5, pady=2)
+        self.gpu_accel_menu = ttk.Combobox(options_frame, textvariable=self.gpu_accel_choice, 
+                                           values=["None", "NVIDIA (NVENC)", "AMD (AMF)", "Intel (QSV)"], 
+                                           state="readonly", width=15)
+        self.gpu_accel_menu.grid(row=5, column=1, sticky="w", padx=5, pady=2)
+        self.gpu_accel_menu.set("None") # Default to no GPU acceleration
+        self.gpu_accel_menu.bind("<<ComboboxSelected>>", lambda e: self._toggle_gpu_preset_options())
+
 
         # Video Preview Canvas
         self.canvas = tk.Canvas(self.master, width=640, height=360, bg="black", bd=2, relief="sunken")
         self.canvas.grid(row=2, column=0, columnspan=3, pady=10, padx=10, sticky="nsew") # Adjusted row
         self.canvas.create_text(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2,
-                                 text="Load a video to see preview\nDrag on preview to select crop area",
-                                 fill="white", font=("Arial", 16))
+                                  text="Load a video to see preview\nDrag on preview to select crop area",
+                                  fill="white", font=("Arial", 16))
 
         # Trimming Controls Frame
         trim_frame = ttk.LabelFrame(self.master, text="Video Trimming")
@@ -174,7 +188,7 @@ class VideoEditorApp:
 
         ttk.Label(trim_frame, text="End Time:").grid(row=1, column=0, sticky="e", padx=5, pady=2)
         self.end_scale = ttk.Scale(trim_frame, from_=0, to=10, orient="horizontal", length=450,
-                                     command=self._on_slider_move)
+                                      command=self._on_slider_move)
         self.end_scale.grid(row=1, column=1, padx=5, pady=2, sticky="ew")
         self.end_time_label = ttk.Label(trim_frame, text="0 sec", width=8)
         self.end_time_label.grid(row=1, column=2, sticky="w", padx=5)
@@ -222,6 +236,25 @@ class VideoEditorApp:
             self.entry_crf.config(state="disabled")
             self.entry_size.config(state="normal")
             self.status_label.config(text="Using Target Size: FFmpeg will attempt to hit this size.")
+
+    def _toggle_gpu_preset_options(self):
+        """
+        Adjusts the state of the FFmpeg preset and potentially other related options
+        based on GPU acceleration and HEVC choice.
+        """
+        gpu_selected = self.gpu_accel_choice.get() != "None"
+
+        if gpu_selected:
+            # When GPU is selected, disable the general FFmpeg preset dropdown.
+            # GPU encoders often have their own specific presets (e.g., 'p1'-'p7' for NVENC)
+            # which will be handled directly in the FFmpeg command construction.
+            self.preset_menu.config(state="disabled")
+            self.status_label.config(text=f"Using GPU encoder ({self.gpu_accel_choice.get()}). Presets are typically handled internally or use specific GPU-vendor presets.")
+        else:
+            # If no GPU is selected, re-enable the general FFmpeg preset dropdown.
+            self.preset_menu.config(state="readonly")
+            # If GPU is not selected, revert to the status message for CRF/Target Size
+            self._toggle_bitrate_crf_options() # Re-sync status message related to quality/size
 
     def _browse_input_file(self):
         filepath = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4 *.mov *.mkv *.avi")])
@@ -290,7 +323,7 @@ class VideoEditorApp:
             canvas_w = self.canvas.winfo_width()
             canvas_h = self.canvas.winfo_height()
             
-            if canvas_w == 1 and canvas_h == 1:
+            if canvas_w == 1 and canvas_h == 1: # Default size before first configure event
                 canvas_w = 640
                 canvas_h = 360
 
@@ -315,12 +348,12 @@ class VideoEditorApp:
             self.canvas_img_display_height = new_height
 
             self.canvas.create_image(self.canvas_img_offset_x, self.canvas_img_offset_y,
-                                     anchor=tk.NW, image=self.displayed_frame_on_canvas)
+                                         anchor=tk.NW, image=self.displayed_frame_on_canvas)
             self._draw_crop_rectangle()
         else:
             self.canvas.delete("all")
             self.canvas.create_text(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2,
-                                     text="Failed to load frame", fill="white", font=("Arial", 16))
+                                         text="Failed to load frame", fill="white", font=("Arial", 16))
 
     def _on_canvas_configure(self, event):
         if self.video_cap and self.video_cap.isOpened():
@@ -328,8 +361,8 @@ class VideoEditorApp:
         else:
             self.canvas.delete("all")
             self.canvas.create_text(event.width / 2, event.height / 2,
-                                     text="Load a video to see preview\nDrag on preview to select crop area",
-                                     fill="white", font=("Arial", 16))
+                                         text="Load a video to see preview\nDrag on preview to select crop area",
+                                         fill="white", font=("Arial", 16))
 
     def _on_slider_move(self, value):
         current_time_sec = float(value)
@@ -345,6 +378,7 @@ class VideoEditorApp:
         if self.video_cap is None or not self.video_cap.isOpened() or self.current_preview_cv_frame is None:
             return
 
+        # Ensure click is within the displayed image area
         if not (self.canvas_img_offset_x <= event.x <= self.canvas_img_offset_x + self.canvas_img_display_width and
                 self.canvas_img_offset_y <= event.y <= self.canvas_img_offset_y + self.canvas_img_display_height):
             return
@@ -366,6 +400,7 @@ class VideoEditorApp:
         if self.crop_start_x == -1:
             return
 
+        # Constrain drag within the displayed image area
         current_x = max(self.canvas_img_offset_x, min(event.x, self.canvas_img_offset_x + self.canvas_img_display_width))
         current_y = max(self.canvas_img_offset_y, min(event.y, self.canvas_img_offset_y + self.canvas_img_display_height))
 
@@ -379,6 +414,7 @@ class VideoEditorApp:
         if self.crop_start_x == -1:
             return
 
+        # Finalize crop coordinates, clamping them to the image display area
         x1_raw = max(self.canvas_img_offset_x, min(self.crop_start_x, self.canvas_img_offset_x + self.canvas_img_display_width))
         y1_raw = max(self.canvas_img_offset_y, min(self.crop_start_y, self.canvas_img_offset_y + self.canvas_img_display_height))
         x2_raw = max(self.canvas_img_offset_x, min(self.crop_end_x, self.canvas_img_offset_x + self.canvas_img_display_width))
@@ -399,7 +435,7 @@ class VideoEditorApp:
 
         if self.crop_start_x != -1 and self.crop_end_x != -1 and \
            abs(self.crop_start_x - self.crop_end_x) >= 2 and \
-           abs(self.crop_start_y - self.crop_end_y) >= 2: # Only draw if valid selection
+           abs(self.crop_start_y - self.crop_end_y) >= 2: # Only draw if valid selection (at least 2x2 pixels)
             self.crop_rectangle_id = self.canvas.create_rectangle(
                 self.crop_start_x, self.crop_start_y, self.crop_end_x, self.crop_end_y,
                 outline="red", width=2, dash=(5, 2)
@@ -421,6 +457,7 @@ class VideoEditorApp:
            abs(self.crop_start_y - self.crop_end_y) < 2:
             return None
 
+        # Calculate relative coordinates on the displayed image within the canvas
         rel_x1_canvas = self.crop_start_x - self.canvas_img_offset_x
         rel_y1_canvas = self.crop_start_y - self.canvas_img_offset_y
         rel_x2_canvas = self.crop_end_x - self.canvas_img_offset_x
@@ -430,6 +467,7 @@ class VideoEditorApp:
             print("Warning: canvas_img_display_width or height is zero. Cannot calculate crop.")
             return None
 
+        # Scale canvas coordinates back to original video resolution
         scale_x = self.original_video_width / self.canvas_img_display_width
         scale_y = self.original_video_height / self.canvas_img_display_height
 
@@ -438,6 +476,7 @@ class VideoEditorApp:
         crop_width = int((rel_x2_canvas - rel_x1_canvas) * scale_x)
         crop_height = int((rel_y2_canvas - rel_y1_canvas) * scale_y)
 
+        # Ensure coordinates and dimensions are valid and even (for video compatibility)
         crop_x = max(0, crop_x)
         crop_y = max(0, crop_y)
         crop_width = max(2, min(crop_width, self.original_video_width - crop_x))
@@ -456,7 +495,7 @@ class VideoEditorApp:
         if duration_sec <= 0:
             raise ValueError("Duration must be positive to calculate bitrate.")
         
-        total_kbits = size_mb * 8192 # Convert MB to kilobits (1 MB = 1024 KB = 1024 * 8 Kbits)
+        total_kbits = size_mb * 8192 # Convert MB to kilobits (1 MB = 8192 Kbits)
 
         audio_bitrate_kbps = 0
         if not self.remove_audio.get():
@@ -466,22 +505,26 @@ class VideoEditorApp:
                 audio_bitrate_kbps = 128 # Fallback if parsing fails
 
         # Calculate available video kbits
-        # Ensure that total_kbits is significantly larger than audio_bitrate_kbps * duration_sec
-        # to avoid negative video bitrate, especially for very short videos or very small targets.
         min_audio_kbits_needed = audio_bitrate_kbps * duration_sec
-        if total_kbits <= min_audio_kbits_needed * 1.05: # Add a small buffer for safety
-             # If target size is too small for chosen audio bitrate,
-             # reduce audio bitrate or allocate minimal video bitrate
-            if total_kbits > 0: # Avoid division by zero if target_kbits is 0
-                adjusted_audio_bitrate_kbps = int(total_kbits / duration_sec / 2) # Allocate half to audio
-                if adjusted_audio_bitrate_kbps < 64: adjusted_audio_bitrate_kbps = 64 # Min audio
-                audio_bitrate_kbps = min(audio_bitrate_kbps, adjusted_audio_bitrate_kbps)
-            else:
-                audio_bitrate_kbps = 0
-
-        video_kbits_per_sec = (total_kbits - (audio_bitrate_kbps * duration_sec)) / duration_sec
-        
-        video_bitrate_kbps = max(100, int(video_kbits_per_sec)) # Minimum 100 kbps for video
+        # If target_kbits is too small, adjust audio bitrate or ensure positive video bitrate
+        if total_kbits <= min_audio_kbits_needed:
+            if total_kbits > 0 and duration_sec > 0:
+                # Try to allocate 70% to video, 30% to audio if target is tight
+                target_video_kbits = total_kbits * 0.7 
+                target_audio_kbits = total_kbits * 0.3
+                
+                audio_bitrate_kbps = int(target_audio_kbits / duration_sec)
+                # Ensure a reasonable minimum for audio
+                if audio_bitrate_kbps < 64 and not self.remove_audio.get(): audio_bitrate_kbps = 64
+                
+                video_kbits_per_sec = (total_kbits - (audio_bitrate_kbps * duration_sec)) / duration_sec
+                video_bitrate_kbps = max(100, int(video_kbits_per_sec)) # Minimum 100 kbps for video
+            else: # Very small/zero target size or duration
+                video_bitrate_kbps = 100 # Minimal video bitrate
+                audio_bitrate_kbps = 64 # Minimal audio bitrate
+        else:
+            video_kbits_per_sec = (total_kbits - (audio_bitrate_kbps * duration_sec)) / duration_sec
+            video_bitrate_kbps = max(100, int(video_kbits_per_sec)) # Minimum 100 kbps for video
         
         return video_bitrate_kbps, audio_bitrate_kbps
 
@@ -518,6 +561,7 @@ class VideoEditorApp:
             target_framerate = self.target_framerate.get()
             ffmpeg_preset = self.ffmpeg_preset.get()
             use_hevc = self.use_hevc.get()
+            gpu_accelerator = self.gpu_accel_choice.get()
 
             # --- Input Validation ---
             if not input_file or not os.path.exists(input_file):
@@ -525,200 +569,200 @@ class VideoEditorApp:
             if not output_file:
                 raise ValueError("Please specify an output file name.")
             if not output_file.lower().endswith(".mp4"):
-                output_file += ".mp4" 
-                self.master.after(0, lambda: self.output_filepath.set(output_file))
+                output_file += ".mp4"
 
-            duration_sec = end_sec - start_sec
-            if duration_sec <= 0:
-                raise ValueError("End time must be after start time and duration must be positive.")
+            if start_sec >= end_sec:
+                raise ValueError("Start time must be before end time.")
+
+            total_duration_to_process = end_sec - start_sec
+            if total_duration_to_process <= 0:
+                raise ValueError("The selected trim duration is too short.")
+
+            ffmpeg_path = get_ffmpeg_path()
+            if ffmpeg_path is None:
+                raise FileNotFoundError("FFmpeg executable not found. Please ensure it's in the same directory as the script/exe or in your system's PATH.")
+
+            # Initialize command with base options
+            command = [ffmpeg_path, "-y"]
+
+            # --- Hardware Acceleration (Decoder - placed BEFORE input file) ---
+            # These options tell FFmpeg to use hardware for decoding the input video
+            if gpu_accelerator == "NVIDIA (NVENC)":
+                command.extend(["-hwaccel", "cuda"]) 
+            elif gpu_accelerator == "AMD (AMF)":
+                command.extend(["-hwaccel", "dxva2"]) # Or 'd3d11va' for D3D11VA
+            elif gpu_accelerator == "Intel (QSV)":
+                command.extend(["-hwaccel", "qsv", "-qsv_decode", "true"])
             
+            # Input file and trimming
+            command.extend(["-ss", str(start_sec), "-to", str(end_sec), "-i", input_file])
+
+            # --- Video Codec and Encoder Options ---
+            video_codec_params = []
+            video_filters = []
+            
+            # Determine the video encoder based on GPU acceleration and HEVC choice
+            video_codec = "libx264" # Default CPU encoder (H.264)
+            if gpu_accelerator == "NVIDIA (NVENC)":
+                video_codec = "hevc_nvenc" if use_hevc else "h264_nvenc"
+                video_codec_params.extend(["-preset", ffmpeg_preset]) # NVENC uses its own presets
+            elif gpu_accelerator == "AMD (AMF)":
+                video_codec = "hevc_amf" if use_hevc else "h264_amf"
+                video_codec_params.extend(["-quality", ffmpeg_preset]) # AMF uses -quality
+            elif gpu_accelerator == "Intel (QSV)":
+                video_codec = "hevc_qsv" if use_hevc else "h264_qsv"
+                video_codec_params.extend(["-preset", ffmpeg_preset]) # QSV also uses presets
+
+            command.extend(["-c:v", video_codec])
+            command.extend(video_codec_params) # Add specific encoder parameters
+
+            # Bitrate or CRF
             if use_crf:
                 try:
                     crf_val = int(crf_value)
                     if not (0 <= crf_val <= 51):
                         raise ValueError("CRF value must be between 0 and 51.")
+                    command.extend(["-crf", str(crf_val)])
                 except ValueError:
-                    raise ValueError("Invalid CRF value. Please enter an integer between 0 and 51.")
-            else: # Using target size (bitrate mode)
-                try:
-                    target_size_mb_val = float(target_size_mb)
-                    if target_size_mb_val <= 0:
-                        raise ValueError("Target size must be a positive number.")
-                except ValueError:
-                    raise ValueError("Invalid target size. Please enter a positive number.")
-
-            ffmpeg_executable = get_ffmpeg_path()
-            if ffmpeg_executable is None:
-                raise FileNotFoundError("FFmpeg executable not found. Please ensure it's in the same directory as the script or in your system's PATH.")
-            
-            cmd = [
-                ffmpeg_executable, '-y',
-                '-ss', str(start_sec),
-                '-i', input_file,
-                '-t', str(duration_sec),
-                '-avoid_negative_ts', 'make_zero',
-            ]
-
-            # --- Video Codec and Options ---
-            if use_hevc:
-                cmd.extend(['-c:v', 'libx265'])
+                    raise ValueError("Invalid CRF value. Please enter an integer.")
             else:
-                cmd.extend(['-c:v', 'libx264'])
-            
-            cmd.extend(['-preset', ffmpeg_preset])
+                try:
+                    size_mb = float(target_size_mb)
+                    if size_mb <= 0:
+                        raise ValueError("Target size must be a positive number.")
+                    
+                    video_bitrate_kbps, audio_bitrate_kbps = self._calculate_bitrate(size_mb, total_duration_to_process, audio_bitrate_str)
+                    command.extend(["-b:v", f"{video_bitrate_kbps}k"])
+                    if not remove_audio:
+                        command.extend(["-b:a", f"{audio_bitrate_kbps}k"])
+                except ValueError:
+                    raise ValueError("Invalid target size. Please enter a number.")
 
-            if use_crf:
-                cmd.extend(['-crf', crf_value])
-            else: # Target Bitrate mode
-                v_bitrate, a_bitrate = self._calculate_bitrate(float(target_size_mb), duration_sec, audio_bitrate_str)
-                cmd.extend([
-                    '-b:v', f'{v_bitrate}k',
-                    '-minrate', f'{v_bitrate}k', # Helps stabilize bitrate for 1-pass ABR
-                    '-maxrate', f'{v_bitrate}k',
-                    '-bufsize', f'{v_bitrate * 2}k', # Buffer size typically 2x bitrate
-                ])
+            # CPU Encoder Preset (only if no GPU acceleration)
+            if gpu_accelerator == "None":
+                command.extend(["-preset", ffmpeg_preset])
 
             # --- Audio Options ---
             if remove_audio:
-                cmd.append('-an') # No audio
+                command.extend(["-an"]) # No audio
             else:
-                cmd.extend(['-c:a', 'aac'])
-                if use_crf: # If using CRF for video, still set a fixed audio bitrate
-                    cmd.extend(['-b:a', audio_bitrate_str])
-                # If using target size for video, audio bitrate is already calculated
-                # by _calculate_bitrate and incorporated into the video bitrate,
-                # so we use the calculated a_bitrate.
-                elif 'a_bitrate' in locals():
-                    cmd.extend(['-b:a', f'{a_bitrate}k'])
+                command.extend(["-c:a", "aac", "-b:a", audio_bitrate_str])
 
-
-            # --- Video Filters ---
-            video_filters = []
-            if half_res_enabled:
-                # Ensure width/height are even for compatibility
-                video_filters.append('scale=iw/2:ih/2:flags=lanczos') 
-
-            crop_filter = self._get_ffmpeg_crop_params()
-            if crop_filter:
-                video_filters.append(crop_filter)
+            # --- Video Filters (Scaling, Cropping, Frame Rate) ---
             
+            # Scaling
+            scale_filter = ""
+            if half_res_enabled:
+                if self.original_video_width > 0 and self.original_video_height > 0:
+                    new_width = (self.original_video_width // 2 // 2) * 2 # Ensure even dimensions
+                    new_height = (self.original_video_height // 2 // 2) * 2
+                    scale_filter = f"scale={new_width}:{new_height}"
+                    print(f"Applying half-resolution scale: {new_width}x{new_height}")
+                else:
+                    self.master.after(0, lambda: messagebox.showwarning("Warning", "Original video dimensions not available for half resolution. Skipping scaling."))
+
+            # Cropping
+            crop_params = self._get_ffmpeg_crop_params()
+            if crop_params:
+                video_filters.append(crop_params)
+
+            if scale_filter:
+                video_filters.append(scale_filter)
+
+            # Frame Rate
             if target_framerate != "Original":
                 try:
-                    target_fps_val = float(target_framerate.split('(')[0].strip()) # Handle "Original (FPS)" format
-                    video_filters.append(f'fps={target_fps_val}')
+                    target_fps = int(target_framerate)
+                    if target_fps > 0:
+                        video_filters.append(f"fps={target_fps}")
+                    else:
+                        raise ValueError
                 except ValueError:
-                    pass # Ignore if invalid framerate, stick to original
+                    self.master.after(0, lambda: messagebox.showwarning("Warning", "Invalid target frame rate. Using original."))
 
             if video_filters:
-                cmd.extend(['-vf', ','.join(video_filters)])
+                command.extend(["-vf", ",".join(video_filters)])
 
-            cmd.extend([
-                '-movflags', '+faststart',
-                output_file
-            ])
+            # Output file
+            command.append(output_file)
 
-            print("FFmpeg command:", " ".join(cmd))
+            print("FFmpeg Command:", " ".join(command))
+
+            self.ffmpeg_process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, # Capture both stdout and stderr
+                universal_newlines=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            )
+
+            # --- Progress Parsing ---
+            duration_regex = re.compile(r"Duration: (\d{2}):(\d{2}):(\d{2})\.\d{2}")
+            time_regex = re.compile(r"time=(\d{2}):(\d{2}):(\d{2})\.\d{2}")
+            full_duration_sec = total_duration_to_process # Use trimmed duration for progress
+
+            # Initial duration discovery (if not already known from OpenCV)
+            # FFmpeg will print the full duration of the *input* file early on.
+            # We are using the trimmed duration, but it's good to keep this in mind.
             
-            self.master.after(0, lambda: self.status_label.config(text="Starting FFmpeg..."))
-
-            # --- Execute FFmpeg and Parse Progress ---
-            # Use universal_newlines=True for text mode, which simplifies reading stderr line by line
-            self.ffmpeg_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-
-            # Initialize current_progress to 0 before the loop
-            current_progress = 0
-
-            # Read stderr line by line for progress updates
-            for line in self.ffmpeg_process.stderr:
-                # Check if cancellation was requested
+            # Read FFmpeg output line by line for progress
+            for line in self.ffmpeg_process.stdout:
+                print(line.strip()) # For debugging: print FFmpeg output to console
+                
+                # Check for cancellation request
                 if self.ffmpeg_process.poll() is not None and self.ffmpeg_process.returncode != 0:
-                    # If the process terminated early (e.g., by user cancel), break
-                    break 
+                    if self.ffmpeg_process.returncode != -15: # -15 is common for SIGTERM (cancel)
+                        self.master.after(0, lambda: messagebox.showerror("Error", f"FFmpeg Error: {line.strip()}"))
+                    break # Exit loop if cancelled or error
 
-                match_time = re.search(r'time=(\d{2}):(\d{2}):(\d{2}\.\d{2})', line)
-                if match_time:
-                    hours = float(match_time.group(1))
-                    minutes = float(match_time.group(2))
-                    seconds = float(match_time.group(3))
-                    current_time = hours * 3600 + minutes * 60 + seconds
+                match = time_regex.search(line)
+                if match:
+                    hours, minutes, seconds = map(int, match.groups())
+                    current_time_processed = hours * 3600 + minutes * 60 + seconds
+                    
+                    if full_duration_sec > 0:
+                        progress = (current_time_processed / full_duration_sec) * 100
+                        # Clamp progress to 100%
+                        progress = min(progress, 100) 
+                        self.master.after(0, lambda p=progress: self.progress_bar.config(value=p))
+                        self.master.after(0, lambda t=current_time_processed, d=full_duration_sec: self.status_label.config(text=f"Processing: {t} / {d} seconds ({p:.1f}%)"))
+                
+                # Small delay to prevent Tkinter from freezing and to avoid aggressive parsing
+                time.sleep(0.01)
 
-                    progress_percentage = (current_time / duration_sec) * 100
-                    current_progress = min(100, max(0, progress_percentage)) # Cap between 0 and 100
+            self.ffmpeg_process.wait() # Wait for the process to truly finish
 
-                    # Update GUI on the main thread
-                    # Use a fixed variable for lambda or pass directly
-                    self.master.after(0, lambda val=current_progress: self.progress_bar.config(value=val))
-                    self.master.after(0, lambda val=current_progress: self.status_label.config(text=f"Processing: {val:.1f}% complete"))
-            
-            # Ensure final progress update
-            self.master.after(0, lambda: self.progress_bar.config(value=100))
-
-            # Communicate needs to be called after reading from stderr, or it might block
-            # if stderr buffer is full. It's best to call it only once at the end
-            # after the loop for stderr has finished.
-            stdout, stderr = self.ffmpeg_process.communicate() 
-            
             if self.ffmpeg_process.returncode == 0:
-                self.master.after(0, lambda: messagebox.showinfo("Success", f"Video saved to {output_file}"))
-                self.master.after(0, lambda: self.status_label.config(text=f"Successfully processed to {output_file}"))
-            elif self.ffmpeg_process.returncode == -9 or self.ffmpeg_process.returncode == 255: # -9 is SIGKILL, 255 is common for early exit
-                # This could be due to manual cancellation, which we already handled
-                # or a specific FFmpeg error. Check if status_label already shows "cancelled".
-                if not "cancelled" in self.status_label.cget("text").lower():
-                     self.master.after(0, lambda: messagebox.showwarning("Process Interrupted", "Video processing was interrupted."))
-                     self.master.after(0, lambda: self.status_label.config(text="Video processing interrupted."))
+                self.master.after(0, lambda: self.progress_bar.config(value=100))
+                self.master.after(0, lambda: self.status_label.config(text=f"Video successfully processed and saved to {output_file}"))
+                self.master.after(0, lambda: messagebox.showinfo("Success", f"Video successfully processed and saved to {output_file}"))
             else:
-                self.master.after(0, lambda: messagebox.showerror("FFmpeg Error", f"FFmpeg failed with error (code {self.ffmpeg_process.returncode}):\n{stderr}"))
-                self.master.after(0, lambda: self.status_label.config(text="FFmpeg failed! Check error details."))
+                stderr_output = self.ffmpeg_process.communicate()[0] # Get any remaining output
+                error_msg = f"FFmpeg process failed with error code {self.ffmpeg_process.returncode}. Output: {stderr_output}"
+                self.master.after(0, lambda: messagebox.showerror("Error", error_msg))
+                self.master.after(0, lambda: self.status_label.config(text="Processing failed! Check console for errors."))
 
-        except ValueError as ve:
-            self.master.after(0, lambda: messagebox.showerror("Input Error", str(ve)))
-            self.master.after(0, lambda: self.status_label.config(text=f"Error: {ve}"))
-        except FileNotFoundError as fnfe:
-            self.master.after(0, lambda: messagebox.showerror("File Not Found", str(fnfe)))
-            self.master.after(0, lambda: self.status_label.config(text=f"Error: {fnfe}"))
+        except ValueError as e:
+            self.master.after(0, lambda: messagebox.showerror("Input Error", str(e)))
+            self.master.after(0, lambda: self.status_label.config(text=f"Error: {e}"))
+        except FileNotFoundError as e:
+            self.master.after(0, lambda: messagebox.showerror("File Error", str(e)))
+            self.master.after(0, lambda: self.status_label.config(text=f"Error: {e}"))
         except Exception as e:
-            self.master.after(0, lambda: messagebox.showerror("An Unexpected Error Occurred", str(e)))
+            self.master.after(0, lambda: messagebox.showerror("An unexpected error occurred", str(e)))
             self.master.after(0, lambda: self.status_label.config(text=f"An unexpected error occurred: {e}"))
         finally:
             self.master.after(0, lambda: self.process_button.config(state=tk.NORMAL))
             self.master.after(0, lambda: self.cancel_button.config(state=tk.DISABLED))
-            self.ffmpeg_process = None # Clear process reference
-
 
     def _on_closing(self):
+        if self.video_cap is not None:
+            self.video_cap.release()
         if self.ffmpeg_process and self.ffmpeg_process.poll() is None:
-            if messagebox.askyesno("Exit Confirmation", "A video is currently processing. Do you want to cancel and exit?"):
-                self.ffmpeg_process.terminate()
-                self.video_cap.release()
-                self.master.destroy()
-            else:
-                # Do not close if user cancels exit
-                return
-        else:
-            if self.video_cap is not None:
-                self.video_cap.release()
-            self.master.destroy()
+            self.ffmpeg_process.terminate() # Ensure FFmpeg process is terminated
+        self.master.destroy()
 
 if __name__ == "__main__":
     root = tk.Tk()
-    
-    try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        theme_path = os.path.join(script_dir, "azure.tcl") # Assuming azure.tcl is in the same dir
-        if os.path.exists(theme_path):
-            root.tk.call("source", theme_path)
-            ttk.Style().theme_use('azure')
-            ttk.Style().configure('Accent.TButton', background='#4CAF50', foreground='white', font=('Arial', 12, 'bold'))
-            ttk.Style().map('Accent.TButton', 
-                            background=[('active', '#5CB85C'), ('pressed', '#398439')],
-                            foreground=[('active', 'white'), ('pressed', 'white')])
-        else:
-            print("Azure theme file (azure.tcl) not found. Using default ttk theme.")
-            ttk.Style().theme_use('default')
-    except Exception as e:
-        print(f"Error loading theme: {e}. Using default ttk theme.")
-        ttk.Style().theme_use('default')
-
     app = VideoEditorApp(root)
     root.mainloop()
