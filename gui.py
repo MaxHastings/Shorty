@@ -162,16 +162,16 @@ class VideoEditorApp:
         
         # Shifted rows for other options
         ttk.Checkbutton(options_frame, text="Remove Audio", variable=self.remove_audio, command=self._toggle_audio_options).grid(row=1, column=0, sticky="w", padx=5, pady=2) 
-        ttk.Label(options_frame, text="Audio Bitrate:").grid(row=2, column=0, sticky="e", padx=5, pady=2) 
+        ttk.Label(options_frame, text="Audio Bitrate:").grid(row=1, column=1, sticky="e", padx=5, pady=2) 
         self.audio_bitrate_menu = ttk.Combobox(options_frame, textvariable=self.audio_bitrate_choice, 
                                                values=["64k", "96k", "128k", "192k", "256k"], state="readonly", width=8)
-        self.audio_bitrate_menu.grid(row=2, column=1, sticky="w", padx=5, pady=2) 
+        self.audio_bitrate_menu.grid(row=1, column=2, sticky="w", padx=5, pady=2) 
         self.audio_bitrate_menu.set("96k")
 
-        ttk.Label(options_frame, text="Target Frame Rate:").grid(row=3, column=0, sticky="e", padx=5, pady=2) 
+        ttk.Label(options_frame, text="Target Frame Rate:").grid(row=1, column=3, sticky="e", padx=5, pady=2) 
         self.framerate_menu = ttk.Combobox(options_frame, textvariable=self.target_framerate, 
                                            values=["Original", "30", "24", "15"], state="readonly", width=8)
-        self.framerate_menu.grid(row=3, column=1, sticky="w", padx=5, pady=2) 
+        self.framerate_menu.grid(row=1, column=4, sticky="w", padx=5, pady=2) 
         self.framerate_menu.set("Original")
 
         ttk.Label(options_frame, text="FFmpeg Preset:").grid(row=4, column=0, sticky="e", padx=5, pady=2) 
@@ -181,19 +181,19 @@ class VideoEditorApp:
         self.preset_menu.set("medium")
 
         # CHANGED: Replaced Checkbutton for H.265 with Combobox for Video Codec
-        ttk.Label(options_frame, text="Video Codec:").grid(row=5, column=0, sticky="e", padx=5, pady=2)
+        ttk.Label(options_frame, text="Video Codec:").grid(row=4, column=2, sticky="e", padx=5, pady=2)
         self.video_codec_menu = ttk.Combobox(options_frame, textvariable=self.video_codec_choice,
                                              values=["H264", "H265", "AV1"], state="readonly", width=8)
-        self.video_codec_menu.grid(row=5, column=1, sticky="w", padx=5, pady=2)
+        self.video_codec_menu.grid(row=4, column=3, sticky="w", padx=5, pady=2)
         self.video_codec_menu.set("H265") # Default selection
         self.video_codec_menu.bind("<<ComboboxSelected>>", lambda e: self._toggle_gpu_preset_options()) # Bind to update GPU/preset options
 
         # Shifted GPU Acceleration to row 6
-        ttk.Label(options_frame, text="GPU Acceleration:").grid(row=6, column=0, sticky="e", padx=5, pady=2) 
+        ttk.Label(options_frame, text="GPU Acceleration:").grid(row=4, column=4, sticky="e", padx=5, pady=2) 
         self.gpu_accel_menu = ttk.Combobox(options_frame, textvariable=self.gpu_accel_choice, 
                                            values=["None", "NVIDIA (NVENC)", "AMD (AMF)", "Intel (QSV)"], 
                                            state="readonly", width=15)
-        self.gpu_accel_menu.grid(row=6, column=1, sticky="w", padx=5, pady=2) 
+        self.gpu_accel_menu.grid(row=4, column=5, sticky="w", padx=5, pady=2) 
         self.gpu_accel_menu.set("None")
         self.gpu_accel_menu.bind("<<ComboboxSelected>>", lambda e: self._toggle_gpu_preset_options())
 
