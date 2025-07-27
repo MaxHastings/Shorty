@@ -32,9 +32,9 @@ class FFmpegUtils:
         return ffmpeg_path
 
     def build_ffmpeg_command(self, input_filepath, output_filepath, start_time_sec, end_time_sec, 
-                             resolution_choice, use_crf, video_crf, target_size_mb, # Changed half_res_enabled to resolution_choice
+                             resolution_choice, use_crf, video_crf, target_size_mb, 
                              remove_audio_var, audio_bitrate_choice, target_framerate, 
-                             ffmpeg_preset, use_hevc, gpu_accel_choice, original_video_width, 
+                             ffmpeg_preset, video_codec_choice, gpu_accel_choice, original_video_width, # Changed use_hevc to video_codec_choice
                              original_video_height, original_video_fps, crop_params, 
                              pass_number=1, total_passes=1, video_bitrate_kbps=None, audio_bitrate_kbps=None):
         
@@ -49,33 +49,66 @@ class FFmpegUtils:
         if end_time_sec > start_time_sec:
             command.extend(["-t", str(end_time_sec - start_time_sec)])
 
-        # Video Codec and Options
-        video_codec = "libx265" if use_hevc else "libx264"
-        command.extend(["-c:v", video_codec])
+        # Determine Video Codec and Encoder (CPU or GPU)
+        final_video_codec = ""
+        apply_cpu_preset = True # Flag to control if -preset should be added for CPU encoders
 
-        # GPU Acceleration
-        gpu_encoder = None
         if gpu_accel_choice == "NVIDIA (NVENC)":
-            gpu_encoder = "h264_nvenc" if not use_hevc else "hevc_nvenc"
-        elif gpu_accel_choice == "AMD (AMF)":
-            gpu_encoder = "h264_amf" if not use_hevc else "hevc_amf"
-        elif gpu_accel_choice == "Intel (QSV)":
-            gpu_encoder = "h264_qsv" if not use_hevc else "hevc_qsv"
+            # For NVIDIA, -hwaccel cuda is often used for decoding/filters,
+            # but the NVENC encoder itself is directly specified.
             command.insert(1, "-hwaccel")
-            command.insert(2, "auto")
+            command.insert(2, "cuda")
+            
+            if video_codec_choice == "H264":
+                final_video_codec = "h264_nvenc"
+            elif video_codec_choice == "H265":
+                final_video_codec = "hevc_nvenc"
+            elif video_codec_choice == "AV1":
+                final_video_codec = "av1_nvenc"
+            apply_cpu_preset = False # NVENC has its own internal presets/tuning
 
-        if gpu_encoder:
-            # Replace CPU encoder with GPU encoder, assuming it's the element right after -c:v
-            try:
-                codec_index = command.index("-c:v") + 1
-                command[codec_index] = gpu_encoder
-            except ValueError: # Should not happen if -c:v is always added
-                pass 
-            # GPU encoders usually have different preset options or none at all
-            # We'll omit the general preset for GPU encoders to avoid conflicts
-        else:
-            # Apply CPU preset only if no GPU acceleration is chosen
+        elif gpu_accel_choice == "AMD (AMF)":
+            # For AMD, dxva2 is a common hardware acceleration method on Windows
+            command.insert(1, "-hwaccel")
+            command.insert(2, "dxva2") 
+            if video_codec_choice == "H264":
+                final_video_codec = "h264_amf"
+            elif video_codec_choice == "H265":
+                final_video_codec = "hevc_amf"
+            elif video_codec_choice == "AV1":
+                final_video_codec = "av1_amf" # Assuming av1_amf is available for AMD
+            apply_cpu_preset = False
+
+        elif gpu_accel_choice == "Intel (QSV)":
+            # For Intel QSV, specify -hwaccel qsv and -qsv_device
+            command.insert(1, "-hwaccel")
+            command.insert(2, "qsv")
+            command.insert(3, "-qsv_device")
+            command.insert(4, "hw") # Auto-detect QSV device
+            if video_codec_choice == "H264":
+                final_video_codec = "h264_qsv"
+            elif video_codec_choice == "H265":
+                final_video_codec = "hevc_qsv"
+            elif video_codec_choice == "AV1":
+                final_video_codec = "av1_qsv"
+            apply_cpu_preset = False
+
+        else: # No GPU acceleration chosen, use CPU encoders
+            if video_codec_choice == "H264":
+                final_video_codec = "libx264"
+            elif video_codec_choice == "H265":
+                final_video_codec = "libx265"
+            elif video_codec_choice == "AV1":
+                final_video_codec = "libsvtav1" # Use SVT-AV1 for software AV1 encoding
+            # apply_cpu_preset remains True
+
+        command.extend(["-c:v", final_video_codec])
+
+        if apply_cpu_preset:
             command.extend(["-preset", ffmpeg_preset])
+        # Note: For hardware encoders, specific presets like -preset:v for NVENC
+        # or -quality for QSV might be needed for fine-tuning, but default
+        # settings are often reasonable.
 
         # Quality/Size Control
         if use_crf:

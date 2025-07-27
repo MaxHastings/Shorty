@@ -51,7 +51,7 @@ class VideoEditorApp:
                         master.iconphoto(True, icon_photo) # Apply to main window and any future Toplevels
                         print(f"Using PNG fallback icon: {png_icon_path}")
                     else:
-                         print(f"No PNG fallback icon found at: {png_icon_path}")
+                        print(f"No PNG fallback icon found at: {png_icon_path}")
                 except Exception as png_e:
                     print(f"Error loading PNG fallback icon: {png_e}")
 
@@ -75,7 +75,8 @@ class VideoEditorApp:
         self.audio_bitrate_choice = tk.StringVar(value="96k")
         self.target_framerate = tk.StringVar(value="Original")
         self.ffmpeg_preset = tk.StringVar(value="medium")
-        self.use_hevc = tk.BooleanVar(value=False)
+        # CHANGED: Replaced use_hevc with video_codec_choice
+        self.video_codec_choice = tk.StringVar(value="H265") # Default to H.265 (HEVC)
         self.gpu_accel_choice = tk.StringVar(value="None")
 
         # Video capture object
@@ -114,7 +115,7 @@ class VideoEditorApp:
         self._update_slider_labels()
         self._toggle_bitrate_crf_options()
         self._toggle_audio_options()
-        self._toggle_gpu_preset_options()
+        self._toggle_gpu_preset_options() # Call this initially to set correct states
 
     def _create_widgets(self):
         self.master.grid_rowconfigure(4, weight=1)
@@ -163,28 +164,35 @@ class VideoEditorApp:
         ttk.Checkbutton(options_frame, text="Remove Audio", variable=self.remove_audio, command=self._toggle_audio_options).grid(row=1, column=0, sticky="w", padx=5, pady=2) 
         ttk.Label(options_frame, text="Audio Bitrate:").grid(row=2, column=0, sticky="e", padx=5, pady=2) 
         self.audio_bitrate_menu = ttk.Combobox(options_frame, textvariable=self.audio_bitrate_choice, 
-                                                values=["64k", "96k", "128k", "192k", "256k"], state="readonly", width=8)
+                                               values=["64k", "96k", "128k", "192k", "256k"], state="readonly", width=8)
         self.audio_bitrate_menu.grid(row=2, column=1, sticky="w", padx=5, pady=2) 
         self.audio_bitrate_menu.set("96k")
 
         ttk.Label(options_frame, text="Target Frame Rate:").grid(row=3, column=0, sticky="e", padx=5, pady=2) 
         self.framerate_menu = ttk.Combobox(options_frame, textvariable=self.target_framerate, 
-                                            values=["Original", "30", "24", "15"], state="readonly", width=8)
+                                           values=["Original", "30", "24", "15"], state="readonly", width=8)
         self.framerate_menu.grid(row=3, column=1, sticky="w", padx=5, pady=2) 
         self.framerate_menu.set("Original")
 
         ttk.Label(options_frame, text="FFmpeg Preset:").grid(row=4, column=0, sticky="e", padx=5, pady=2) 
         self.preset_menu = ttk.Combobox(options_frame, textvariable=self.ffmpeg_preset, 
-                                            values=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], state="readonly", width=10)
+                                           values=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], state="readonly", width=10)
         self.preset_menu.grid(row=4, column=1, sticky="w", padx=5, pady=2) 
         self.preset_menu.set("medium")
 
-        ttk.Checkbutton(options_frame, text="Use H.265 (HEVC) Codec", variable=self.use_hevc, command=self._toggle_gpu_preset_options).grid(row=5, column=0, sticky="w", padx=5, pady=2) 
+        # CHANGED: Replaced Checkbutton for H.265 with Combobox for Video Codec
+        ttk.Label(options_frame, text="Video Codec:").grid(row=5, column=0, sticky="e", padx=5, pady=2)
+        self.video_codec_menu = ttk.Combobox(options_frame, textvariable=self.video_codec_choice,
+                                             values=["H264", "H265", "AV1"], state="readonly", width=8)
+        self.video_codec_menu.grid(row=5, column=1, sticky="w", padx=5, pady=2)
+        self.video_codec_menu.set("H265") # Default selection
+        self.video_codec_menu.bind("<<ComboboxSelected>>", lambda e: self._toggle_gpu_preset_options()) # Bind to update GPU/preset options
 
+        # Shifted GPU Acceleration to row 6
         ttk.Label(options_frame, text="GPU Acceleration:").grid(row=6, column=0, sticky="e", padx=5, pady=2) 
         self.gpu_accel_menu = ttk.Combobox(options_frame, textvariable=self.gpu_accel_choice, 
-                                            values=["None", "NVIDIA (NVENC)", "AMD (AMF)", "Intel (QSV)"], 
-                                            state="readonly", width=15)
+                                           values=["None", "NVIDIA (NVENC)", "AMD (AMF)", "Intel (QSV)"], 
+                                           state="readonly", width=15)
         self.gpu_accel_menu.grid(row=6, column=1, sticky="w", padx=5, pady=2) 
         self.gpu_accel_menu.set("None")
         self.gpu_accel_menu.bind("<<ComboboxSelected>>", lambda e: self._toggle_gpu_preset_options())
@@ -215,23 +223,26 @@ class VideoEditorApp:
 
         ttk.Button(trim_frame, text="Reset Crop Selection", command=self._reset_crop_selection).grid(row=2, column=1, pady=5, sticky="w")
 
+        # Shifted process_frame to row 7
         process_frame = ttk.Frame(self.master)
-        process_frame.grid(row=5, column=0, columnspan=3, pady=10, padx=10, sticky="ew")
+        process_frame.grid(row=7, column=0, columnspan=3, pady=10, padx=10, sticky="ew")
         process_frame.grid_columnconfigure(0, weight=1)
         process_frame.grid_columnconfigure(1, weight=1)
 
         self.process_button = ttk.Button(process_frame, text="Trim & Compress Video", command=self._start_compression_thread,
-                                            style="Accent.TButton")
+                                             style="Accent.TButton")
         self.process_button.grid(row=0, column=0, pady=5, sticky="ew")
 
         self.cancel_button = ttk.Button(process_frame, text="Cancel", command=self.video_processor.cancel_compression, state=tk.DISABLED)
         self.cancel_button.grid(row=0, column=1, pady=5, padx=(5,0), sticky="ew")
 
+        # Shifted progress_bar to row 8
         self.progress_bar = ttk.Progressbar(self.master, orient="horizontal", length=100, mode="determinate")
-        self.progress_bar.grid(row=6, column=0, columnspan=3, pady=5, padx=10, sticky="ew")
+        self.progress_bar.grid(row=8, column=0, columnspan=3, pady=5, padx=10, sticky="ew")
 
+        # Shifted status_label to row 9
         self.status_label = ttk.Label(self.master, text="", foreground="blue")
-        self.status_label.grid(row=7, column=0, columnspan=3, pady=5)
+        self.status_label.grid(row=9, column=0, columnspan=3, pady=5)
 
     def _bind_events(self):
         self.canvas.bind("<ButtonPress-1>", self._on_button_press)
@@ -257,13 +268,17 @@ class VideoEditorApp:
 
     def _toggle_gpu_preset_options(self):
         gpu_selected = self.gpu_accel_choice.get() != "None"
+        selected_codec = self.video_codec_choice.get()
 
         if gpu_selected:
             self.preset_menu.config(state="disabled")
-            self.status_label.config(text=f"Using GPU encoder ({self.gpu_accel_choice.get()}). Presets are typically handled internally or use specific GPU-vendor presets.")
+            # Update status label to reflect both GPU and selected codec
+            self.status_label.config(text=f"Using GPU encoder ({self.gpu_accel_choice.get()}) for {selected_codec}. Presets are handled internally.")
         else:
             self.preset_menu.config(state="readonly")
-            self._toggle_bitrate_crf_options()
+            # Revert status label if no GPU is selected
+            self.status_label.config(text=f"Using CPU encoder for {selected_codec}. Select a preset for quality/speed.")
+            self._toggle_bitrate_crf_options() # Re-apply the CRF/Bitrate status if GPU is deselected
 
     def _browse_input_file(self):
         filepath = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4 *.mov *.mkv *.avi")])
@@ -514,7 +529,7 @@ class VideoEditorApp:
         self.progress_bar.config(value=0, mode="determinate")
 
         compression_thread = threading.Thread(target=self._compress_video_task, 
-                                                args=(input_file, output_file, start_time, end_time))
+                                              args=(input_file, output_file, start_time, end_time))
         compression_thread.daemon = True
         compression_thread.start()
 
@@ -540,7 +555,7 @@ class VideoEditorApp:
                 self.audio_bitrate_choice.get(), 
                 self.target_framerate.get(), 
                 self.ffmpeg_preset.get(), 
-                self.use_hevc.get(), 
+                self.video_codec_choice.get(), # CHANGED: Pass video_codec_choice.get()
                 self.gpu_accel_choice.get(), 
                 self.original_video_width, 
                 self.original_video_height, 
@@ -624,3 +639,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = VideoEditorApp(root)
     root.mainloop()
+

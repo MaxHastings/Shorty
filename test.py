@@ -2,15 +2,76 @@ import sys
 import threading
 from pynput import keyboard
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QFileDialog, QMessageBox
-from PyQt5.QtCore import Qt, QRect, QTimer, QPoint
+from PyQt5.QtCore import Qt, QRect, QTimer, QPoint, pyqtSignal, QThread # Import QThread and pyqtSignal
 from PyQt5.QtGui import QRegion, QPainter, QPen, QColor
 import subprocess
 import os
 import signal
+import time # Import time for small delays
 
 should_show_overlay = False
 overlay_instance = None
 ffmpeg_process = None # To hold the FFmpeg subprocess
+
+# Define a custom QThread for handling FFmpeg termination
+class FFmpegStopThread(QThread):
+    finished_stopping = pyqtSignal(str) # Signal to emit when stopping is done, carrying output filename
+
+    def __init__(self, process, output_filename, parent=None):
+        super().__init__(parent)
+        self.ffmpeg_process = process
+        self.output_filename = output_filename
+
+    def run(self):
+        if self.ffmpeg_process and self.ffmpeg_process.poll() is None:
+            try:
+                print("[*] Attempting to gracefully stop FFmpeg (sending 'q')...")
+                self.ffmpeg_process.stdin.write(b'q\n')
+                self.ffmpeg_process.stdin.flush()
+                self.ffmpeg_process.stdin.close() # Close stdin after writing
+
+                # Give FFmpeg a moment to process 'q'
+                time.sleep(0.1)
+
+                return_code = self.ffmpeg_process.wait(timeout=5)
+                print(f"[*] FFmpeg exited with code: {return_code}")
+                if return_code is not None and return_code != 0:
+                    stderr_output = self.ffmpeg_process.stderr.read().decode(sys.getfilesystemencoding(), errors='ignore')
+                    if stderr_output:
+                        print(f"[*] FFmpeg stderr during stop: \n{stderr_output}")
+
+            except subprocess.TimeoutExpired:
+                print("[*] FFmpeg did not terminate gracefully after 'q'. Attempting Ctrl+C...")
+                try:
+                    self.ffmpeg_process.send_signal(signal.CTRL_C_EVENT if sys.platform == "win32" else signal.SIGINT)
+                    return_code = self.ffmpeg_process.wait(timeout=5)
+                    print(f"[*] FFmpeg exited with code after Ctrl+C: {return_code}")
+                except subprocess.TimeoutExpired:
+                    print("[*] FFmpeg still not stopped. Forcibly killing...")
+                    self.ffmpeg_process.kill()
+                except Exception as e:
+                    print(f"[*] Error sending Ctrl+C or killing FFmpeg: {e}")
+
+            except Exception as e:
+                print(f"[*] Error during graceful FFmpeg stop attempt: {e}")
+                print("[*] Attempting to forcibly kill FFmpeg as a fallback...")
+                try:
+                    if self.ffmpeg_process.poll() is None:
+                        self.ffmpeg_process.kill()
+                        print("[*] FFmpeg forcibly killed.")
+                    else:
+                        print("[*] FFmpeg already stopped or never started properly.")
+                except Exception as kill_e:
+                    print(f"[*] Error during forced FFmpeg kill: {kill_e}")
+            finally:
+                # Ensure the global ffmpeg_process is cleared in the main thread after this thread finishes
+                # A direct assignment here might lead to race conditions; better to handle in slot
+                pass
+        else:
+            print("[*] No active FFmpeg process or process already terminated.")
+        
+        # Emit signal when done, passing the output filename for the save dialog
+        self.finished_stopping.emit(self.output_filename)
 
 
 class DimOverlay(QWidget):
@@ -45,6 +106,7 @@ class DimOverlay(QWidget):
 
         self.recording = False
         self.output_filename = "" # To store the path of the temporary recording file
+        self.ffmpeg_stop_thread = None # Reference to the stopping thread
 
     def mousePressEvent(self, event):
         if not self.box_drawn:
@@ -67,7 +129,7 @@ class DimOverlay(QWidget):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
             if self.recording:
-                self.stop_ffmpeg_recording()
+                self.stop_ffmpeg_recording_async() # Call the async stop
                 QMessageBox.information(self, "Recording Aborted", "Recording was stopped due to ESC key press.")
             self.close()
 
@@ -114,7 +176,7 @@ class DimOverlay(QWidget):
             self.start_ffmpeg_recording()
         else:
             self.record_button.setText("Start Recording")
-            self.stop_ffmpeg_recording()
+            self.stop_ffmpeg_recording_async() # Call the async stop
 
     def start_ffmpeg_recording(self):
         global ffmpeg_process
@@ -136,55 +198,25 @@ class DimOverlay(QWidget):
             self.record_button.setText("Start Recording")
             return
 
-        # --- FFmpeg command using gdigrab for screen capture ---
-        # gdigrab is often more reliable for direct screen capture than dshow inputs that are virtual cameras.
-        # This command also correctly maps video (from gdigrab) and audio (from dshow).
-        
         ffmpeg_command = [
             ffmpeg_executable,
-            "-f", "gdigrab",        # Input format for screen capture on Windows
-            "-framerate", "30",     # Frame rate for screen capture
-            "-offset_x", str(x),    # X coordinate of the top-left corner
-            "-offset_y", str(y),    # Y coordinate of the top-left corner
-            "-video_size", f"{width}x{height}", # Dimensions of the capture area
-            "-i", "desktop",        # Input source for gdigrab (captures the entire desktop)
-
-            # Audio Input (using dshow) - MAKE SURE THIS DEVICE NAME IS CORRECT
-            # Based on your ffmpeg -list_devices output: "Analogue 1 + 2 (Focusrite USB Audio)"
+            "-f", "gdigrab",
+            "-framerate", "30",
+            "-offset_x", str(x),
+            "-offset_y", str(y),
+            "-video_size", f"{width}x{height}",
+            "-i", "desktop",
             "-f", "dshow",
-            "-i", "audio=Analogue 1 + 2 (Focusrite USB Audio)", # Your actual audio device
-
-            # Video Encoding
+            "-i", "audio=Analogue 1 + 2 (Focusrite USB Audio)",
             "-c:v", "libx264",
-            "-preset", "ultrafast", # Adjust preset for speed vs. file size/quality
-            
-            # Audio Encoding
+            "-preset", "ultrafast",
             "-c:a", "aac",
-            "-b:a", "128k", # Audio bitrate
-
-            # Map streams: 0:v:0 for video from the first input (gdigrab), 1:a:0 for audio from the second input (dshow)
+            "-b:a", "128k",
             "-map", "0:v:0",
             "-map", "1:a:0",
-            
-            "-y",                   # Overwrite output files without asking
+            "-y",
             self.output_filename
         ]
-
-        # --- Alternative: Video only (no audio) if you prefer ---
-        # ffmpeg_command = [
-        #     ffmpeg_executable,
-        #     "-f", "gdigrab",
-        #     "-framerate", "30",
-        #     "-offset_x", str(x),
-        #     "-offset_y", str(y),
-        #     "-video_size", f"{width}x{height}",
-        #     "-i", "desktop",
-        #     "-c:v", "libx264",
-        #     "-preset", "ultrafast",
-        #     "-y",
-        #     self.output_filename
-        # ]
-
 
         print(f"[*] FFmpeg Command: {' '.join(ffmpeg_command)}")
 
@@ -203,69 +235,46 @@ class DimOverlay(QWidget):
             self.recording = False
             self.record_button.setText("Start Recording")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to start FFmpeg: {e}\nCheck FFmpeg command, device names, and if OBS Virtual Camera is actively streaming (if you chose to use it).")
+            QMessageBox.critical(self, "Error", f"Failed to start FFmpeg: {e}\nCheck FFmpeg command, device names.")
             self.recording = False
             self.record_button.setText("Start Recording")
 
-
-    def stop_ffmpeg_recording(self):
+    def stop_ffmpeg_recording_async(self):
         global ffmpeg_process
-        if ffmpeg_process and ffmpeg_process.poll() is None: # Check if process is still running
-            try:
-                print("[*] Attempting to gracefully stop FFmpeg (sending 'q')...")
-                ffmpeg_process.stdin.write(b'q\n')
-                ffmpeg_process.stdin.flush()
-                ffmpeg_process.stdin.close() # Close stdin after writing
+        if ffmpeg_process and ffmpeg_process.poll() is None:
+            self.record_button.setEnabled(False) # Disable button to prevent re-clicks
+            self.record_button.setText("Stopping...")
 
-                return_code = ffmpeg_process.wait(timeout=5)
-                print(f"[*] FFmpeg exited with code: {return_code}")
-                if return_code is not None and return_code != 0:
-                    stderr_output = ffmpeg_process.stderr.read().decode(sys.getfilesystemencoding(), errors='ignore')
-                    if stderr_output:
-                        print(f"[*] FFmpeg stderr during stop: \n{stderr_output}")
-
-            except subprocess.TimeoutExpired:
-                print("[*] FFmpeg did not terminate gracefully after 'q'. Attempting Ctrl+C...")
-                try:
-                    ffmpeg_process.send_signal(signal.CTRL_C_EVENT if sys.platform == "win32" else signal.SIGINT)
-                    return_code = ffmpeg_process.wait(timeout=5)
-                    print(f"[*] FFmpeg exited with code after Ctrl+C: {return_code}")
-                except subprocess.TimeoutExpired:
-                    print("[*] FFmpeg still not stopped. Forcibly killing...")
-                    ffmpeg_process.kill()
-                except Exception as e:
-                    print(f"[*] Error sending Ctrl+C or killing FFmpeg: {e}")
-
-            except Exception as e:
-                print(f"[*] Error during graceful FFmpeg stop attempt: {e}")
-                print("[*] Attempting to forcibly kill FFmpeg as a fallback...")
-                try:
-                    if ffmpeg_process.poll() is None:
-                        ffmpeg_process.kill()
-                        print("[*] FFmpeg forcibly killed.")
-                    else:
-                        print("[*] FFmpeg already stopped or never started properly.")
-                except Exception as kill_e:
-                    print(f"[*] Error during forced FFmpeg kill: {kill_e}")
-            finally:
-                ffmpeg_process = None
-                self.prompt_save_location()
+            # Create and start the FFmpegStopThread
+            self.ffmpeg_stop_thread = FFmpegStopThread(ffmpeg_process, self.output_filename)
+            self.ffmpeg_stop_thread.finished_stopping.connect(self._on_ffmpeg_stopped)
+            self.ffmpeg_stop_thread.start()
         else:
             print("[*] No active FFmpeg process or process already terminated.")
+            # If no process, but temp file exists, still prompt save
             if os.path.exists(self.output_filename):
-                 self.prompt_save_location()
+                self.prompt_save_location(self.output_filename)
             else:
-                 QMessageBox.warning(self, "No Recording Found", "No active recording to stop and no temporary file found.")
+                QMessageBox.warning(self, "No Recording Found", "No active recording to stop and no temporary file found.")
+            self.record_button.setEnabled(True)
+            self.record_button.setText("Start Recording")
 
+    def _on_ffmpeg_stopped(self, output_filename):
+        # This slot is executed on the main UI thread
+        global ffmpeg_process
+        ffmpeg_process = None # Clear the global reference
+        self.record_button.setEnabled(True)
+        self.record_button.setText("Start Recording")
+        self.prompt_save_location(output_filename) # Call prompt_save_location with the filename
 
-    def prompt_save_location(self):
-        if not self.output_filename or not os.path.exists(self.output_filename):
+    def prompt_save_location(self, temp_file_path):
+        if not temp_file_path or not os.path.exists(temp_file_path):
             QMessageBox.warning(self, "No Recording Found", "No recording file was found. It might not have been created or saved correctly.")
             return
 
         options = QFileDialog.Options()
 
-        suggested_filename = os.path.basename(self.output_filename)
+        suggested_filename = os.path.basename(temp_file_path)
 
         save_path, _ = QFileDialog.getSaveFileName(
             self,
@@ -278,19 +287,19 @@ class DimOverlay(QWidget):
         if save_path:
             try:
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                os.rename(self.output_filename, save_path)
+                os.rename(temp_file_path, save_path)
                 QMessageBox.information(self, "Save Complete", f"Video saved successfully to:\n{save_path}")
                 print(f"[*] Video saved to: {save_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error Saving", f"Failed to save video:\n{e}")
-                if os.path.exists(self.output_filename):
-                    os.remove(self.output_filename)
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path) # Clean up temp file on save error
         else:
             QMessageBox.information(self, "Save Cancelled", "Video save was cancelled. Temporary file will be deleted.")
-            if os.path.exists(self.output_filename):
+            if os.path.exists(temp_file_path):
                 try:
-                    os.remove(self.output_filename)
-                    print(f"[*] Deleted temporary recording: {self.output_filename}")
+                    os.remove(temp_file_path)
+                    print(f"[*] Deleted temporary recording: {temp_file_path}")
                 except Exception as e:
                     print(f"Error deleting temporary file: {e}")
 
@@ -314,8 +323,9 @@ def run_app():
         if should_show_overlay:
             should_show_overlay = False
             if overlay_instance:
+                # If a new overlay is activated while recording, stop the old one gracefully
                 if overlay_instance.recording:
-                    overlay_instance.stop_ffmpeg_recording()
+                    overlay_instance.stop_ffmpeg_recording_async() # Use async stop
                     QMessageBox.warning(overlay_instance, "Recording Interrupted", "Previous recording was stopped due to new overlay activation.")
                 overlay_instance.close()
             overlay_instance = DimOverlay()
@@ -326,7 +336,7 @@ def run_app():
     timer.start(100)
 
     print("[*] Press F3 to activate overlay. Press ESC to close and stop recording.")
-    app.exec_()
+    sys.exit(app.exec_()) # Use sys.exit for clean application exit
 
 
 if __name__ == "__main__":
